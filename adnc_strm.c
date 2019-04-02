@@ -26,15 +26,14 @@
 //#define LOG_NDEBUG 0
 //#define LOG_NDDEBUG 0
 
-#include <cutils/log.h>
+#include <log/log.h>
 #include "iaxxx-system-identifiers.h"
 #include "adnc_strm.h"
 #include "tunnel.h"
 
 #define MAX_TUNNELS         (32)
 #define BUF_SIZE            (8192)
-#define CVQ_ENDPOINT        (IAXXX_SYSID_PLUGIN_1_OUT_EP_0)
-#define AMBIENT_ENDPOINT    (IAXXX_SYSID_PLUGIN_4_OUT_EP_0)
+
 #define CVQ_TUNNEL_ID       (1)
 #define TNL_Q15             (0xF)
 
@@ -403,7 +402,7 @@ exit:
 __attribute__ ((visibility ("default")))
 long adnc_strm_open(bool enable_stripping,
                     unsigned int kw_start_frame,
-                    int keyword_model_type)
+                    int stream_end_point)
 {
     int ret = 0, err;
     struct adnc_strm_device *adnc_strm_dev = NULL;
@@ -416,10 +415,7 @@ long adnc_strm_open(bool enable_stripping,
         goto exit_on_error;
     }
 
-    if (keyword_model_type == HOTWORD_MODEL)
-        adnc_strm_dev->end_point = CVQ_ENDPOINT;
-    else
-        adnc_strm_dev->end_point = AMBIENT_ENDPOINT;
+    adnc_strm_dev->end_point = stream_end_point;
     adnc_strm_dev->idx = 0;
     adnc_strm_dev->mode = 0;
     adnc_strm_dev->encode = TNL_Q15;

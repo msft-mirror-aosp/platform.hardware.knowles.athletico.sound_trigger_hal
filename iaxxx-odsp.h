@@ -20,6 +20,10 @@
 #define __IAXXX_ODSP_H__
 
 #define NAME_MAX_SIZE 256
+#define IAXXX_PACKAGE_VER_STR_SIZE_MAX (100)
+#define IAXXX_PLUGIN_VER_STR_SIZE_MAX (100)
+#define IAXXX_MAX_PLUGIN_ENDPOINTS (16)
+#define IAXXX_MAX_VER_STR_SIZE (20)
 
 struct iaxxx_plugin_info {
   uint32_t plg_idx;
@@ -27,6 +31,7 @@ struct iaxxx_plugin_info {
   uint32_t block_id;
   uint32_t inst_id;
   uint32_t priority;
+  uint32_t config_id;
 };
 struct iaxxx_plugin_param {
   uint32_t inst_id;
@@ -53,6 +58,23 @@ struct iaxxx_set_event {
   uint8_t inst_id;
   uint32_t event_enable_mask;
   uint32_t block_id;
+};
+struct iaxxx_evt_trigger {
+  uint16_t src_id;
+  uint16_t evt_id;
+  uint32_t src_opaque;
+};
+struct iaxxx_evt_read_subscription {
+  uint16_t src_id;
+  uint16_t evt_id;
+  uint16_t dst_id;
+  uint32_t dst_opaque;
+};
+struct iaxxx_evt_retrieve_notification {
+  uint16_t src_id;
+  uint16_t evt_id;
+  uint32_t src_opaque;
+  uint32_t dst_opaque;
 };
 struct iaxxx_evt_info {
   uint16_t src_id;
@@ -118,6 +140,32 @@ struct iaxxx_plugin_endpoint_status_info {
   uint8_t op_sample_rate;
   uint16_t op_frame_length;
 };
+struct iaxxx_plugin_get_package_version {
+  uint8_t inst_id;
+  char version[IAXXX_PACKAGE_VER_STR_SIZE_MAX];
+  uint32_t len;
+};
+struct iaxxx_plugin_get_plugin_version {
+  uint8_t inst_id;
+  char version[IAXXX_PLUGIN_VER_STR_SIZE_MAX];
+  uint32_t len;
+};
+struct iaxxx_plugin_endpoint_timestamps {
+  uint8_t proc_id;
+  uint64_t timestamps[IAXXX_MAX_PLUGIN_ENDPOINTS];
+};
+struct iaxxx_proc_execution_status {
+  uint8_t proc_id;
+  uint32_t status;
+};
+struct iaxxx_sys_versions {
+  uint32_t app_ver_num;
+  char app_ver_str[IAXXX_MAX_VER_STR_SIZE];
+  uint32_t app_ver_str_len;
+  uint32_t rom_ver_num;
+  char rom_ver_str[IAXXX_MAX_VER_STR_SIZE];
+  uint32_t rom_ver_str_len;
+};
 #define IAXXX_IOCTL_MAGIC 'I'
 #define ODSP_PLG_CREATE _IO(IAXXX_IOCTL_MAGIC, 0x11)
 #define ODSP_PLG_RESET _IO(IAXXX_IOCTL_MAGIC, 0x12)
@@ -141,4 +189,16 @@ struct iaxxx_plugin_endpoint_status_info {
 #define ODSP_PLG_SET_PARAM_BLK_WITH_ACK _IO(IAXXX_IOCTL_MAGIC, 0x24)
 #define ODSP_PLG_GET_STATUS_INFO _IO(IAXXX_IOCTL_MAGIC, 0x25)
 #define ODSP_PLG_GET_ENDPOINT_STATUS _IO(IAXXX_IOCTL_MAGIC, 0x26)
+#define ODSP_EVENT_TRIGGER _IO(IAXXX_IOCTL_MAGIC, 0x27)
+#define ODSP_EVENT_READ_SUBSCRIPTION _IO(IAXXX_IOCTL_MAGIC, 0x28)
+#define ODSP_EVENT_RETRIEVE_NOTIFICATION _IO(IAXXX_IOCTL_MAGIC, 0x29)
+#define ODSP_PLG_GET_PACKAGE_VERSION _IO(IAXXX_IOCTL_MAGIC, 0x2A)
+#define ODSP_PLG_GET_PLUGIN_VERSION _IO(IAXXX_IOCTL_MAGIC, 0x2B)
+#define ODSP_SET_MPLL_SRC _IO(IAXXX_IOCTL_MAGIC, 0x2C)
+#define ODSP_EVENT_RESET_READ_INDEX _IO(IAXXX_IOCTL_MAGIC, 0x2C)
+#define ODSP_PLG_GET_ENDPOINT_TIMESTAMPS _IO(IAXXX_IOCTL_MAGIC, 0x2D)
+#define ODSP_GET_PROC_EXECUTION_STATUS _IO(IAXXX_IOCTL_MAGIC, 0x2E)
+#define ODSP_GET_SYS_VERSIONS _IO(IAXXX_IOCTL_MAGIC, 0x2F)
+#define ODSP_GET_SYS_DEVICE_ID _IO(IAXXX_IOCTL_MAGIC, 0x30)
+#define ODSP_GET_SYS_MODE _IO(IAXXX_IOCTL_MAGIC, 0x31)
 #endif

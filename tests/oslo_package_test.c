@@ -345,7 +345,7 @@ int main(int argc, char *argv[])
             goto exit;
         }
 
-        /* Destory Dummy sensor plugin */
+        /* destroy Dummy sensor plugin */
         pi.block_id = 1;
         pi.inst_id  = 3;
         err = ioctl(fileno(odsp_node), ODSP_PLG_DESTROY, (unsigned long)&pi);
@@ -355,7 +355,7 @@ int main(int argc, char *argv[])
             goto exit;
         }
 
-        /* Destory Buffer plugin */
+        /* destroy Buffer plugin */
         pi.block_id = 1;
         pi.inst_id  = 2;
         err = ioctl(fileno(odsp_node), ODSP_PLG_DESTROY, (unsigned long)&pi);

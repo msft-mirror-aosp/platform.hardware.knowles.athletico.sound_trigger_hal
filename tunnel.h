@@ -77,6 +77,16 @@ int ia_disable_tunneling_source(struct ia_tunneling_hal *tun_hdl,
 int ia_read_tunnel_data(struct ia_tunneling_hal *tun_hdl, void *buf, int buf_size);
 
 /**
+ * Set the output buffer threshold for the event generation.
+ *
+ * Input  - threshold
+ *
+ * Output - Zero on success, errno on failure.
+ */
+int ia_set_tunnel_out_buf_threshold(struct ia_tunneling_hal *thdl,
+                                    uint32_t threshold);
+
+/**
  * Closes tunneling port
  *
  * Input  - tun_hdl - Handle to the Tunneling HAL.
