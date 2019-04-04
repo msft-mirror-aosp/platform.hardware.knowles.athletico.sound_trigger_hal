@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-ifneq (,$(findstring $(USE_SOUND_TRIGGER_HAL),athletico))
+ifneq (,$(findstring $(USE_SOUND_TRIGGER_HAL),iaxxx))
 
 LOCAL_PATH := $(call my-dir)
 
@@ -98,18 +98,19 @@ LOCAL_SRC_FILES := tests/sensor_param_test.c
 LOCAL_32_BIT_ONLY := true
 LOCAL_SHARED_LIBRARIES := liblog \
 			libutils \
-			libcutils
+			libcutils \
+			libtinyalsa
+LOCAL_C_INCLUDES += external/tinyalsa/include \
+		      $(LOCAL_PATH)/../hal
+
 include $(BUILD_EXECUTABLE)
 
 include $(CLEAR_VARS)
-
-LOCAL_PRELINK_MODULE := false
-LOCAL_MODULE := oslo_config_test
-LOCAL_SRC_FILES := tests/oslo_config_test.c \
-			tests/oslo_sound_model_control.cpp
+LOCAL_MODULE := libosloutils
+LOCAL_SRC_FILES := tests/oslo_sound_model_control.cpp \
+			tests/oslo_iaxxx_sensor_control.c
 LOCAL_C_INCLUDES += external/tinyalsa/include \
 			$(call include-path-for, audio-route)
-LOCAL_32_BIT_ONLY := true
 LOCAL_HEADER_LIBRARIES := libhardware_headers
 LOCAL_SHARED_LIBRARIES := liblog \
 			libutils \
@@ -118,8 +119,34 @@ LOCAL_SHARED_LIBRARIES := liblog \
 			libhidlbase \
 			libodsp \
 			android.hardware.soundtrigger@2.0
+LOCAL_MODULE_TAGS := optional
 LOCAL_PROPRIETARY_MODULE := true
+include $(BUILD_SHARED_LIBRARY)
 
+include $(CLEAR_VARS)
+LOCAL_PRELINK_MODULE := false
+LOCAL_MODULE := oslo_data_injection_test
+LOCAL_SRC_FILES := tests/oslo_data_injection_test.c
+LOCAL_32_BIT_ONLY := true
+LOCAL_HEADER_LIBRARIES := libhardware_headers
+LOCAL_SHARED_LIBRARIES := liblog \
+			libutils \
+			libcutils \
+			libosloutils
+LOCAL_PROPRIETARY_MODULE := true
+include $(BUILD_EXECUTABLE)
+
+include $(CLEAR_VARS)
+LOCAL_PRELINK_MODULE := false
+LOCAL_MODULE := oslo_config_test
+LOCAL_SRC_FILES := tests/oslo_config_test.c
+LOCAL_32_BIT_ONLY := true
+LOCAL_HEADER_LIBRARIES := libhardware_headers
+LOCAL_SHARED_LIBRARIES := liblog \
+			libutils \
+			libcutils \
+			libosloutils
+LOCAL_PROPRIETARY_MODULE := true
 include $(BUILD_EXECUTABLE)
 
 include $(CLEAR_VARS)
@@ -166,6 +193,58 @@ LOCAL_32_BIT_ONLY := true
 LOCAL_SHARED_LIBRARIES := liblog \
 			libcutils \
 			libodsp
+
+include $(BUILD_EXECUTABLE)
+
+include $(CLEAR_VARS)
+
+LOCAL_PRELINK_MODULE := false
+LOCAL_VENDOR_MODULE := true
+LOCAL_MODULE := dump_debug_info
+LOCAL_SRC_FILES := tests/dump_debug_info.c
+LOCAL_32_BIT_ONLY := true
+LOCAL_SHARED_LIBRARIES := liblog
+
+include $(BUILD_EXECUTABLE)
+
+include $(CLEAR_VARS)
+
+LOCAL_PRELINK_MODULE := false
+LOCAL_VENDOR_MODULE := true
+LOCAL_MODULE := crash_event_logger
+LOCAL_SRC_FILES := tests/crash_event_logger.c
+LOCAL_32_BIT_ONLY := true
+LOCAL_SHARED_LIBRARIES := liblog libcutils
+
+include $(BUILD_EXECUTABLE)
+
+include $(CLEAR_VARS)
+LOCAL_PRELINK_MODULE := false
+LOCAL_VENDOR_MODULE := true
+LOCAL_MODULE := setparamblk_test
+LOCAL_SRC_FILES := tests/setparamblk_test.c
+LOCAL_32_BIT_ONLY := true
+LOCAL_SHARED_LIBRARIES := libcutils \
+			libodsp
+
+include $(BUILD_EXECUTABLE)
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := plugin_status_test
+LOCAL_SRC_FILES := tests/plugin_status_test.c
+LOCAL_VENDOR_MODULE := true
+LOCAL_C_INCLUDES += $(LOCAL_PATH)/
+LOCAL_32_BIT_ONLY := true
+LOCAL_SHARED_LIBRARIES := libcutils libodsp
+
+include $(BUILD_EXECUTABLE)
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := get_pwr_stats
+LOCAL_SRC_FILES := tests/get_pwr_stats.c
+LOCAL_C_INCLUDES += $(LOCAL_PATH)/
+LOCAL_32_BIT_ONLY := true
+LOCAL_SHARED_LIBRARIES := libcutils liblog
 
 include $(BUILD_EXECUTABLE)
 endif

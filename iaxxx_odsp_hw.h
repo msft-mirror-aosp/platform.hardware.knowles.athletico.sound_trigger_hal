@@ -81,6 +81,12 @@ struct iaxxx_get_event_info {
   uint32_t data;
 };
 
+enum clock_source {
+    SYSCLK,
+    INT_OSC,
+    EXT_OSC,
+};
+
 /**
  * Initialize the ODSP HAL
  *
@@ -121,6 +127,32 @@ int iaxxx_odsp_package_unload(struct iaxxx_odsp_hw *odsp_hw_hdl,
 			                const uint32_t pkg_id);
 
 /**
+ * Get package version
+ *
+ * Input  - odsp_hw_hdl - Handle to odsp hw structure
+ *          inst_id - Instance ID
+ *          version - Package version string buffer
+ *          len - String buffer size
+ *
+ * Output - 0 on success, on failure < 0
+ */
+int iaxxx_odsp_plugin_get_package_version(struct iaxxx_odsp_hw *odsp_hw_hdl,
+                            uint8_t inst_id, char *version, uint32_t len);
+
+/**
+ * Get plugin version
+ *
+ * Input  - odsp_hw_hdl - Handle to odsp hw structure
+ *          inst_id - Instance ID
+ *          version - Plugin version string buffer
+ *          len - String buffer size
+ *
+ * Output - 0 on success, on failure < 0
+ */
+int iaxxx_odsp_plugin_get_plugin_version(struct iaxxx_odsp_hw *odsp_hw_hdl,
+                            uint8_t inst_id, char *version, uint32_t len);
+
+/**
  * Create a plugin
  *
  * Input  - odsp_hw_hdl - Handle to odsp hw structure
@@ -129,6 +161,7 @@ int iaxxx_odsp_package_unload(struct iaxxx_odsp_hw *odsp_hw_hdl,
  *          pkg_id - Package ID
  *          plg_idx - Plugin Index*
  *          block_id - Block ID
+ *          config_id - Config ID
  *
  * Output - 0 on success, on failure < 0
  */
@@ -137,7 +170,8 @@ int iaxxx_odsp_plugin_create(struct iaxxx_odsp_hw *odsp_hw_hdl,
                             const uint32_t priority,
                             const uint32_t pkg_id,
                             const uint32_t plg_idx,
-                            const uint32_t block_id);
+                            const uint32_t block_id,
+                            const uint32_t config_id);
 
 /**
  * Set the creation configuration on a plugin
@@ -321,6 +355,71 @@ int iaxxx_odsp_evt_unsubscribe(struct iaxxx_odsp_hw *odsp_hw_hdl,
                             const uint16_t src_id,
                             const uint16_t event_id,
                             const uint16_t dst_id);
+
+/**
+ * Trigger an event. This may be most useful when debugging the system,
+ * but can also be used to trigger simultaneous behavior in entities which
+ * have subscribed, or to simply provide notifications regarding host status:
+ *
+ * Input  - odsp_hw_hdl - Handle to odsp hw structure
+ *          src_id      - SystemId of event source
+ *          evt_id      - Id of event
+ *          src_opaque  - Source opaque to pass with event notification
+ *
+ * Output - 0 on success, on failure < 0
+ */
+int iaxxx_odsp_evt_trigger(struct iaxxx_odsp_hw *odsp_hw_hdl,
+                        uint16_t src_id,
+                        uint16_t evt_id,
+                        uint32_t src_opaque);
+
+/**
+ * Fetches next event subscription entry from the last read position
+ *
+ * Input  - odsp_hw_hdl - Handle to odsp hw structure
+ *          src_id      - System Id of event source
+ *          evt_id      - Event Id
+ *          dst_id      - System Id of event destination
+ *          dst_opaque  - Destination opaque data
+ *
+ * Output - 0 on success, on failure < 0
+ */
+int iaxxx_odsp_evt_read_subscription(struct iaxxx_odsp_hw *odsp_hw_hdl,
+                                    uint16_t *src_id,
+                                    uint16_t *evt_id,
+                                    uint16_t *dst_id,
+                                    uint32_t *dst_opaque);
+
+/**
+ * Reset index for retrieving subscription entries
+ *
+ * Input  - odsp_hw_hdl - Handle to odsp hw structure
+ *
+ * Output - 0 on success, on failure < 0
+ */
+int iaxxx_odsp_evt_reset_read_index(struct iaxxx_odsp_hw *odsp_hw_hdl);
+
+/**
+ * Retrieve an event notification
+ *
+ * Input  - odsp_hw_hdl - Handle to odsp hw structure
+ *          src_id      - pointer to uint16_t for reporting SystemId of
+ *                        event source
+ *          evt_dd      - pointer to uint16_t for reporting Id of event
+ *          src_opaque  - pointer to the first parameter of event
+ *          dst_opaque  - pointer to the second parameter of event
+ *                        This will be destOpaque in case if event is
+ *                        subscribed with valid destOpaque otherwise
+ *                        it will be used as second parameter.
+ *
+ * Output - 0 on success, on failure < 0
+ */
+int iaxxx_odsp_evt_retrieve_notification(struct iaxxx_odsp_hw *odsp_hw_hdl,
+                                        uint16_t *src_id,
+                                        uint16_t *evt_id,
+                                        uint32_t *src_opaque,
+                                        uint32_t *dst_opaque);
+
 /**
  * Retrieve an event
  *
@@ -341,6 +440,7 @@ int iaxxx_odsp_evt_getevent(struct iaxxx_odsp_hw *odsp_hw_hdl,
  *          pkg_id - Package ID
  *          plg_idx - Plugin Index*
  *          block_id - Block ID
+ *          config_id - Config ID
  *
  * Output - 0 on success, on failure < 0
  */
@@ -349,7 +449,8 @@ int iaxxx_odsp_plugin_create_static_package(struct iaxxx_odsp_hw *odsp_hw_hdl,
                                             const uint32_t priority,
                                             const uint32_t pkg_id,
                                             const uint32_t plg_idx,
-                                            const uint32_t block_id);
+                                            const uint32_t block_id,
+                                            const uint32_t config_id);
 
 /**
  * Get a parameter block from a plugin
@@ -399,6 +500,17 @@ int iaxxx_odsp_plugin_read_error(struct iaxxx_odsp_hw *odsp_hw_hdl,
                                 uint32_t *error_code,
                                 uint8_t *error_instance);
 
+/* Read the timestamps of all output endpoint
+ *
+ * Input  - odsp_hw_hdl     - Handle to odsp hw structure
+ *          proc_id         - Proc ID
+ *          timestamps      - The timestamps array(with 16 elements count)
+ *                            to be filled.
+ *
+ * Output - 0 on success, on failure < 0
+ */
+int iaxxx_odsp_plugin_get_ep_timestamps(struct iaxxx_odsp_hw *odsp_hw_hdl,
+                                    uint64_t *timestamps, uint8_t proc_id);
 
 /**
  * Set a parameter block on a plugin and get ack to
@@ -462,6 +574,51 @@ int iaxxx_odsp_plugin_get_endpoint_status(
             const uint8_t ep_index,
             const uint8_t direction,
             struct iaxxx_plugin_endpoint_status_data *plugin_ep_status_data);
+
+/**
+ * Returns the execution status of given processor
+ *
+ * Input  - odsp_hw_hdl     - Handle to odsp hw structure
+ *          proc_id         - Proc id
+ *          status          - Execution status of the processor
+ *
+ * Output - 0 on success, on failure < 0
+ */
+int iaxxx_odsp_get_proc_execution_status(struct iaxxx_odsp_hw *odsp_hw_hdl,
+                                    uint8_t proc_id, uint32_t *status);
+
+/**
+ * Returns Rom version number, Rom version string
+ *         Application version number, Application version string
+ *
+ * Input  - odsp_hw_hdl     - Handle to odsp hw structure
+ *          rom_ver_num     - Rom version number
+ *          rom_ver_str     - Rom version string
+ *          rom_ver_str_len - Rom version string length
+ *          app_ver_num     - App version number
+ *          app_ver_str     - App version string
+ *          app_ver_str_len - App version string length
+ *
+ * Output - 0 on success, on failure < 0
+ */
+int iaxxx_odsp_get_sys_versions(struct iaxxx_odsp_hw *odsp_hw_hdl,
+                                uint32_t *rom_ver_num,
+                                char *rom_ver_str,
+                                uint32_t rom_ver_str_len,
+                                uint32_t *app_ver_num,
+                                char *app_ver_str,
+                                uint32_t app_ver_str_len);
+
+/**
+ * Returns Device ID
+ *
+ * Input  - odsp_hw_hdl     - Handle to odsp hw structure
+ *          device_id       - Returned Device ID
+ *
+ * Output - 0 on success, on failure < 0
+ */
+int iaxxx_odsp_get_device_id(struct iaxxx_odsp_hw *odsp_hw_hdl,
+                            uint32_t *device_id);
 
 #if __cplusplus
 } // extern "C"

@@ -24,7 +24,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-#include <cutils/log.h>
+#include <log/log.h>
 #include "iaxxx-tunnel-intf.h"
 #include "iaxxx-system-identifiers.h"
 #include "tunnel.h"
@@ -149,4 +149,21 @@ int ia_read_tunnel_data(struct ia_tunneling_hal *thdl,
     }
 
     return read_bytes;
+}
+
+int ia_set_tunnel_out_buf_threshold(struct ia_tunneling_hal *thdl,
+                                    uint32_t threshold)
+{
+    int err;
+
+    FUNCTION_ENTRY_LOG;
+
+    err = ioctl(thdl->tunnel_dev, TUNNEL_SET_EVENT_THRESHOLD,
+                threshold);
+    if (err == -1) {
+        ALOGE("%s: ERROR Tunnel terminate failed %s",
+            __func__, strerror(errno));
+    }
+
+    return err;
 }

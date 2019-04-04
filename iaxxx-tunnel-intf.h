@@ -69,4 +69,5 @@ enum iaxxx_tunnel_dir_type {
 #define TUNNEL_UNSUBSCRIBE_META_VQ _IO('K', 0x01c)
 #define TUNNEL_EVENT_SUBSCRIBE _IOWR('K', 0x01d, struct iaxxx_tnl_evt_info)
 #define TUNNEL_EVENT_UNSUBSCRIBE _IOWR('K', 0x01e, struct iaxxx_tnl_evt_info)
+#define TUNNEL_SET_EVENT_THRESHOLD _IOW('K', 0x021, uint32_t)
 #endif

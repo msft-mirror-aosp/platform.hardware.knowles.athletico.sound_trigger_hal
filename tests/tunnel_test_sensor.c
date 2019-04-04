@@ -21,12 +21,14 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <sys/ioctl.h>
+#include <unistd.h>
 
 #define LOG_TAG "ia_tunneling_sensor_test"
 
 #include <cutils/log.h>
 #include "iaxxx-system-identifiers.h"
 #include "iaxxx-tunnel-intf.h"
+#include "iaxxx-sensor-tunnel.h"
 
 #define MAX_TUNNELS                 32
 #define BUF_SIZE                    8192
@@ -37,6 +39,9 @@
 #define SENSOR_TUNNEL_SOURCE_ID     IAXXX_SYSID_CHANNEL_RX_15_EP_0
 #define SENSOR_TUNNEL_MODE          TNL_MODE_ASYNC
 #define SENSOR_TUNNEL_ENCODE        TNL_ENC_Q15
+#define VSYNC_SENSOR_SOURCE_ID      IAXXX_SYSID_SENSOR_OUTPUT_1
+#define VSYNC_SENSOR_MODE           TNL_MODE_ASYNC
+#define VSYNC_SENSOR_ENCODE         TNL_ENC_OPAQUE
 
 struct raf_format_type {
     uint16_t frameSizeInBytes;  // Frame length in bytes
@@ -63,7 +68,7 @@ void sigint_handler(int sig __unused) {
 int main(int argc, char *argv[]) {
     int err = 0;
     FILE *tun_dev = NULL;
-    FILE *out_fp = NULL;
+    FILE *out_fp[MAX_TUNNELS] = { NULL };
     FILE *unp_out_fp = NULL;
     int bytes_avail = 0, bytes_rem = 0;
     int bytes_read = 0;
@@ -98,10 +103,25 @@ int main(int argc, char *argv[]) {
         goto exit;
     }
 
+    err = ioctl(fileno(tun_dev), FLICKER_ROUTE_SETUP, NULL);
+    if (err == -1) {
+        ALOGE("%s: ERROR Tunnel setup failed for VSYNC sensor %s", __func__, strerror(errno));
+        goto exit;
+    }
+
+    tm.tunlSrc = VSYNC_SENSOR_SOURCE_ID;
+    tm.tunlMode = VSYNC_SENSOR_MODE;
+    tm.tunlEncode = VSYNC_SENSOR_ENCODE;
+    err = ioctl(fileno(tun_dev), FLICKER_TUNNEL_SETUP, &tm);
+    if (err == -1) {
+        ALOGE("%s: ERROR Tunnel setup failed for VSYNC sensor %s", __func__, strerror(errno));
+        goto exit;
+    }
+
     tm.tunlSrc = SENSOR_TUNNEL_SOURCE_ID;
     tm.tunlMode = SENSOR_TUNNEL_MODE;
     tm.tunlEncode = SENSOR_TUNNEL_ENCODE;
-    err = ioctl(fileno(tun_dev), TUNNEL_SETUP, &tm);
+    err = ioctl(fileno(tun_dev), FLICKER_TUNNEL_SETUP, &tm);
     if (err == -1) {
         ALOGE("%s: ERROR Tunnel setup failed %s", __func__, strerror(errno));
         goto exit;
@@ -207,15 +227,15 @@ read_again:
             struct raf_frame_type rft;
             memcpy(&rft, buf_itr, sizeof(struct raf_frame_type));
             if (true == valid_frame) {
-                if (NULL == out_fp) {
+                if (NULL == out_fp[tunnel_id]) {
                     char filename[256];
                     snprintf(filename, 256,
                              "%sid%d-src0x%x-enc0x%x.raw",
                              OUTPUT_FILE, tunnel_id,
                              tunl_src, rft.format.encoding);
                     // Open the file to dump
-                    out_fp = fopen(filename, "wb");
-                    if (NULL == out_fp) {
+                    out_fp[tunnel_id] = fopen(filename, "wb");
+                    if (NULL == out_fp[tunnel_id]) {
                         ALOGE("ERROR: Failed to open the file %s", filename);
                         goto exit;
                     }
@@ -240,7 +260,7 @@ read_again:
             if (true == valid_frame) {
                 ALOGD("@@@Tunnel id %d encoding %d",
                         tunnel_id, rft.format.encoding);
-                fwrite(buf_itr, rft.format.frameSizeInBytes, 1, out_fp);
+                fwrite(buf_itr, rft.format.frameSizeInBytes, 1, out_fp[tunnel_id]);
             }
 
             /* Calculate the frame drop count */
@@ -274,13 +294,32 @@ exit:
         fclose(unp_out_fp);
     }
 
-    if (out_fp)
-        fclose(out_fp);
+    for (i = 0; i < MAX_TUNNELS; i++) {
+        if (out_fp[i]) {
+            fflush(out_fp[i]);
+            fclose(out_fp[i]);
+        }
+    }
 
     tm.tunlSrc = SENSOR_TUNNEL_SOURCE_ID;
     tm.tunlMode = SENSOR_TUNNEL_MODE;
     tm.tunlEncode = SENSOR_TUNNEL_ENCODE;
-    err = ioctl(fileno(tun_dev), TUNNEL_TERMINATE, &tm);
+    err = ioctl(fileno(tun_dev), FLICKER_TUNNEL_TERMINATE, &tm);
+    if (err == -1) {
+        ALOGE("%s: ERROR Tunnel terminate failed %s",
+                __func__, strerror(errno));
+    }
+
+    tm.tunlSrc = VSYNC_SENSOR_SOURCE_ID;
+    tm.tunlMode = VSYNC_SENSOR_MODE;
+    tm.tunlEncode = VSYNC_SENSOR_ENCODE;
+    err = ioctl(fileno(tun_dev), FLICKER_TUNNEL_TERMINATE, &tm);
+    if (err == -1) {
+        ALOGE("%s: ERROR Tunnel terminate failed %s",
+                __func__, strerror(errno));
+    }
+
+    err = ioctl(fileno(tun_dev), FLICKER_ROUTE_TERMINATE, NULL);
     if (err == -1) {
         ALOGE("%s: ERROR Tunnel terminate failed %s",
                 __func__, strerror(errno));

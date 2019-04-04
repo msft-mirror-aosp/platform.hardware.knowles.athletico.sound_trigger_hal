@@ -34,14 +34,12 @@
 
 
 #define MAX_TUNNELS 32
-#define TUNNELS_THAT_NEED_SYNC 10
 #define BUF_SIZE 32768
-#define OUTPUT_FILE                 "/data/data/tnl_op"
-#define UNPARSED_OUTPUT_FILE        "/data/data/unparsed_output"
+#define MAX_FILE_PATH 256
 
-#ifdef FILENAME_ASSIGN
-#define OUTPUT_FILE_FOLDER             "/data/data"
-#endif /* FILENAME_ASSIGN */
+#define DEFAULT_PATH                "/data/data"
+#define FILE_PREFIX                 "/tnl_op"
+#define UNPARSED_OUTPUT_FILE        "/unparsed_output"
 
 struct raf_format_type {
     uint16_t frameSizeInBytes; /*!< Frame length in bytes */
@@ -78,6 +76,7 @@ void parse_audio_tunnel_data(FILE *out_fp, unsigned char *buf_itr, int frame_sz_
     kst_float_to_q15_vector(q16_buf, buf_itr, frameSizeInWords);
 
     fwrite(q16_buf, (frameSizeInWords * 2), 1, out_fp);
+    fflush(out_fp);
 }
 
 int main(int argc, char *argv[]) {
@@ -92,7 +91,10 @@ int main(int argc, char *argv[]) {
     const unsigned char magic_num[4]  = {0x45, 0x4D, 0x4F, 0x52};
     int i = 0;
     bool valid_frame = true;
+    char filepath[MAX_FILE_PATH];
+    char filename[MAX_FILE_PATH];
     int num_of_tunnels = 0;
+    int num_tunnel_params;
     float timer_signal = 0;
     timer_t timer_id;
     int tunnel_src[MAX_TUNNELS] = { 0 };
@@ -108,7 +110,7 @@ int main(int argc, char *argv[]) {
     int instance;
 
     if (argc < 5) {
-        ALOGE("USAGE: %s <instance number> <Number of tunnels> <Time in seconds> <Source End pt 1> <tnl mode> <encode fmt> <Source End pt 2> <tnl mode> <encode fmt>...", argv[0]);
+        ALOGE("USAGE: %s <instance number> <Number of tunnels> <Time in seconds> <Source End pt 1> <tnl mode> <encode fmt> <Source End pt 2> <tnl mode> <encode fmt>... <output path>", argv[0]);
         return -EINVAL;
     }
 
@@ -126,9 +128,11 @@ int main(int argc, char *argv[]) {
         return -EINVAL;
     }
 
+    num_tunnel_params = num_of_tunnels * 3 + 4;
 #ifdef FILENAME_ASSIGN
     char filename_str_format[256] = {0};
     bool is_specified_name = false;
+    bool is_specified_path= false;
     for (int i = 0; i < argc ; i++) {
         if (strncmp(argv[i], "-f", sizeof(char)*2) == 0) {
             if ((i+1) < argc) {
@@ -137,24 +141,33 @@ int main(int argc, char *argv[]) {
                 is_specified_name = true;
             }
         }
+        if (strncmp(argv[i], "-p", sizeof(char)*2) == 0) {
+            if ((i+1) < argc) {
+                snprintf(filepath, sizeof(filepath), "%s", argv[i+1]);
+                ALOGE("specify a output file path %s, argc i = %d, argv[%d] = %s", filepath, i, i+1, argv[i+1]);
+                is_specified_path = true;
+            }
+        }
     }
 
-    if (is_specified_name) {
-        if (argc != (num_of_tunnels * 3 + 4 + 2)) {
-            ALOGE("USAGE: %s <instance number> <Number of tunnels> <Sync Tunnel req> <Source End pt 1> <tnl mode> <encode fmt> <Source End pt 2> <tnl mode> <encode fmt>... [-f filename]", argv[0]);
+    if (is_specified_name || is_specified_path) {
+        int spec_number = 2 * ((int) is_specified_name + (int) is_specified_path);
+
+        if (argc != (num_tunnel_params + spec_number)) {
+            ALOGE("USAGE: %s <instance number> <Number of tunnels> <Sync Tunnel req> <Source End pt 1> <tnl mode> <encode fmt> <Source End pt 2> <tnl mode> <encode fmt>... [-f filename] [-p filepath]", argv[0]);
             return -EINVAL;
         }
         else {
             ALOGE("is_specified_name = TRUE");
         }
     } else {
-        if (argc != (num_of_tunnels * 3 + 4)) {
+        if (argc != num_tunnel_params && argc != num_tunnel_params + 1) {
             ALOGE("USAGE: %s <instance number> <Number of tunnels> <Sync Tunnel req> <Source End pt 1> <tnl mode> <encode fmt> <Source End pt 2> <tnl mode> <encode fmt>...", argv[0]);
             return -EINVAL;
         }
     }
 #else
-    if (argc != (num_of_tunnels * 3 + 4)) {
+    if (argc != num_tunnel_params && argc != num_tunnel_params + 1) {
         ALOGE("USAGE: %s <instance number> <Number of tunnels> <Sync Tunnel req> <Source End pt 1> <tnl mode> <encode fmt> <Source End pt 2> <tnl mode> <encode fmt>...", argv[0]);
         return -EINVAL;
     }
@@ -167,6 +180,19 @@ int main(int argc, char *argv[]) {
         tunnel_encode[i] = strtol(argv[i*3+6], NULL, 0);
         ALOGD("Tunnel source 0x%x Tunnel mode %d Tunnel encode %d", tunnel_src[i], tunnel_mode[i], tunnel_encode[i]);
     }
+
+#ifdef FILENAME_ASSIGN
+    if (!is_specified_path) {
+        strcpy(filepath, DEFAULT_PATH);
+    }
+#else
+    if (argc == num_tunnel_params) {
+        strcpy(filepath, DEFAULT_PATH);
+    } else {
+        strcpy(filepath, argv[argc-1]);
+    }
+#endif
+    ALOGE("Output path %s", filepath);
 
     thdl = ia_start_tunneling(0);
     if (NULL == thdl) {
@@ -188,9 +214,10 @@ int main(int argc, char *argv[]) {
         goto exit;
     }
 
-    unp_out_fp = fopen(UNPARSED_OUTPUT_FILE, "wb");
+    snprintf(filename, MAX_FILE_PATH, "%s%s", filepath, UNPARSED_OUTPUT_FILE);
+    unp_out_fp = fopen(filename, "wb");
     if (NULL == unp_out_fp) {
-        ALOGE("Failed to open the file %s", UNPARSED_OUTPUT_FILE);
+        ALOGE("Failed to open the file %s", filename);
         goto exit;
     }
 
@@ -229,8 +256,8 @@ read_again:
                 memcpy(buf, buf_itr, bytes_rem);
             }
         } else {
-			bytes_rem = 0;
-		}
+            bytes_rem = 0;
+        }
 
         // Ensure that we read BUF_SIZE always otherwise the kernel read will hang
         bytes_avail = ia_read_tunnel_data (thdl,
@@ -290,17 +317,16 @@ read_again:
             memcpy(&rft, buf_itr, sizeof(struct raf_frame_type));
             if (true == valid_frame) {
                 if (NULL == out_fp[tunnel_id]) {
-                    char filename[256];
 #ifdef FILENAME_ASSIGN
                     if (is_specified_name) {
-                        snprintf(filename, 256, "%s/%s", OUTPUT_FILE_FOLDER, filename_str_format);
+                        snprintf(filename, 256, "%s/%s", filepath, filename_str_format);
                     } else if (TNL_ENC_OPAQUE == rft.format.encoding) {
 #else
                     if (TNL_ENC_OPAQUE == rft.format.encoding) {
 #endif /* FILENAME_ASSIGN */
-                        snprintf(filename, 256, "%sid%d-src0x%x-enc0x%x_client%d.raw", OUTPUT_FILE, tunnel_id, tunl_src, rft.format.encoding, instance);
+                        snprintf(filename, MAX_FILE_PATH, "%s%sid%d-src0x%x-enc0x%x_client%d.raw", filepath, FILE_PREFIX, tunnel_id, tunl_src, rft.format.encoding, instance);
                     } else {
-                        snprintf(filename, 256, "%sid%d-src0x%x-enc0x%x_client%d.pcm", OUTPUT_FILE, tunnel_id, tunl_src, rft.format.encoding, instance);
+                        snprintf(filename, MAX_FILE_PATH, "%s%sid%d-src0x%x-enc0x%x_client%d.pcm", filepath, FILE_PREFIX, tunnel_id, tunl_src, rft.format.encoding, instance);
                     }
                     // Open the file to dump
                     out_fp[tunnel_id] = fopen(filename, "wb");
@@ -344,14 +370,14 @@ read_again:
             buf_itr += rft.format.frameSizeInBytes;
             bytes_avail -= rft.format.frameSizeInBytes;
             /* For debugging the tunnel read errors or wrong magic numbers or bus errors*/
-			bytes_read += rft.format.frameSizeInBytes + min_bytes_req;
+            bytes_read += rft.format.frameSizeInBytes + min_bytes_req;
         } while (bytes_avail > min_bytes_req);
     }
 
 exit:
     for (i = 0; i < MAX_TUNNELS; i++) {
         if (notFirstFrame[i]) {
-			ALOGE("drop count tunnel id %u: %u", i, frameDropCount[i]);
+            ALOGE("drop count tunnel id %u: %u", i, frameDropCount[i]);
         }
     }
     ALOGE("bytes_read so far %d", bytes_read);
@@ -366,8 +392,10 @@ exit:
     }
 
     for (i = 0; i < MAX_TUNNELS; i++) {
-        if (out_fp[i])
+        if (out_fp[i]) {
+            fflush(out_fp[i]);
             fclose(out_fp[i]);
+        }
     }
 
     for (i = 0; i < num_of_tunnels; i++) {
