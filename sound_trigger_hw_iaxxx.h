@@ -22,5 +22,6 @@
 #define AMBIENT_AUDIO_MODEL  "6ac81359-2dc2-4fea-a0a0-bd378ed6da4f"
 #define CHRE_AUDIO_MODEL     "57caddb1-acdb-4dce-8cb0-2e95a2313aee"
 #define ENTITY_AUDIO_MODEL   "12caddb1-acdb-4dce-8cb0-2e95a2313aee"
+#define WAKEUP_MODEL         "e3e60ef3-a81e-4b8b-8c47-6e47b1a672b8"
 
 #endif //_SOUND_TRIGGER_HW_IAXXX_H_
