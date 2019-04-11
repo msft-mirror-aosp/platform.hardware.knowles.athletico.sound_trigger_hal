@@ -54,6 +54,7 @@
 #define OK_GOOGLE_KW_ID             (0)
 #define AMBIENT_KW_ID               (1)
 #define ENTITY_KW_ID                (2)
+#define WAKEUP_KW_ID                (3)
 #define USELESS_KW_ID               (999)
 
 #define CVQ_ENDPOINT                    (IAXXX_SYSID_PLUGIN_1_OUT_EP_0)
@@ -139,6 +140,7 @@ struct knowles_sound_trigger_device {
     sound_trigger_uuid_t ambient_model_uuid;
     sound_trigger_uuid_t chre_model_uuid;
     sound_trigger_uuid_t entity_model_uuid;
+    sound_trigger_uuid_t wakeup_model_uuid;
 
     int last_detected_model_type;
     bool is_mic_route_enabled;
@@ -489,6 +491,28 @@ static int setup_package(struct knowles_sound_trigger_device *stdev,
             ALOGE("Failed to set Hotword state");
             goto exit;
         }
+    } else if (check_uuid_equality(model->uuid, stdev->wakeup_model_uuid)) {
+        if (!(stdev->current_enable & PLUGIN1_MASK)) {
+            err = setup_hotword_package(stdev->odsp_hdl);
+            if (err != 0) {
+                ALOGE("Failed to load Hotword package");
+                goto exit;
+            }
+        }
+        err = write_model(stdev->odsp_hdl, model->data, model->data_sz,
+                        model->kw_id);
+        if (err != 0) {
+            ALOGE("Failed to write Wakeup model");
+            goto exit;
+        }
+
+        //setup model state.
+        stdev->current_enable = stdev->current_enable | WAKEUP_MASK;
+        err = set_hotword_state(stdev->odsp_hdl, stdev->current_enable);
+        if (err != 0) {
+            ALOGE("Failed to set Wakeup state");
+            goto exit;
+        }
     } else if (check_uuid_equality(model->uuid, stdev->ambient_model_uuid)) {
         if (!(stdev->current_enable & PLUGIN2_MASK)) {
             err = setup_ambient_package(stdev->odsp_hdl);
@@ -558,6 +582,10 @@ static int setup_buffer(struct knowles_sound_trigger_device *stdev,
             if (stdev->bc == NOT_CONFIGURED) {
                 configure_buffer_plugin(stdev, TWO_SECOND);
             }
+        } else if (check_uuid_equality(model->uuid, stdev->wakeup_model_uuid)) {
+            if (stdev->bc == NOT_CONFIGURED) {
+                configure_buffer_plugin(stdev, TWO_SECOND);
+            }
         } else if (check_uuid_equality(model->uuid, stdev->ambient_model_uuid)) {
             if (stdev->bc == NOT_CONFIGURED || stdev->bc == TWO_SECOND) {
                 configure_buffer_plugin(stdev, MULTI_SECOND);
@@ -570,10 +598,12 @@ static int setup_buffer(struct knowles_sound_trigger_device *stdev,
     } else {
         if (!(stdev->current_enable & ENTITY_MASK) &&
             !(stdev->current_enable & AMBIENT_MASK) &&
-            stdev->current_enable & HOTWORD_MASK) {
+            (stdev->current_enable & HOTWORD_MASK ||
+            stdev->current_enable & WAKEUP_MASK)) {
             // We need to switch to the 2 second buffer if only hotword is enabled
             configure_buffer_plugin(stdev, TWO_SECOND);
         } else if (!(stdev->current_enable & HOTWORD_MASK ||
+            stdev->current_enable & WAKEUP_MASK ||
             stdev->current_enable & AMBIENT_MASK ||
             stdev->current_enable & ENTITY_MASK)) {
             destroy_mic_buffer(stdev->odsp_hdl);
@@ -611,6 +641,28 @@ static int destroy_package(struct knowles_sound_trigger_device *stdev,
             goto exit;
         }
         stdev->current_enable = stdev->current_enable & ~HOTWORD_MASK;
+
+        if (!(stdev->current_enable & PLUGIN1_MASK)) {
+            err = destroy_hotword_package(stdev->odsp_hdl);
+            if (err != 0) {
+                ALOGE("Failed to destroy Hotword package");
+                goto exit;
+            }
+        }
+
+    } else if (check_uuid_equality(model->uuid, stdev->wakeup_model_uuid)) {
+        err = tear_hotword_state(stdev->odsp_hdl, WAKEUP_MASK);
+        if (err != 0) {
+            ALOGE("Failed to tear Wakeup state");
+            goto exit;
+        }
+
+        err = flush_model(stdev->odsp_hdl, model->kw_id);
+        if (err != 0) {
+            ALOGE("Failed to flush Wakeup model");
+            goto exit;
+        }
+        stdev->current_enable = stdev->current_enable & ~WAKEUP_MASK;
 
         if (!(stdev->current_enable & PLUGIN1_MASK)) {
             err = destroy_hotword_package(stdev->odsp_hdl);
@@ -678,9 +730,15 @@ static int set_package_route(struct knowles_sound_trigger_device *stdev,
      */
     if (check_uuid_equality(uuid, stdev->chre_model_uuid))
         set_chre_audio_route(stdev->route_hdl, bargein);
-    else if (check_uuid_equality(uuid, stdev->hotword_model_uuid))
-        set_hotword_route(stdev->route_hdl, bargein);
-    else if (check_uuid_equality(uuid, stdev->ambient_model_uuid)) {
+    else if (check_uuid_equality(uuid, stdev->hotword_model_uuid)) {
+        if (!((stdev->current_enable & PLUGIN1_MASK) & ~HOTWORD_MASK)) {
+            set_hotword_route(stdev->route_hdl, bargein);
+        }
+    } else if (check_uuid_equality(uuid, stdev->wakeup_model_uuid)) {
+        if (!((stdev->current_enable & PLUGIN1_MASK) & ~WAKEUP_MASK)) {
+            set_hotword_route(stdev->route_hdl, bargein);
+        }
+    } else if (check_uuid_equality(uuid, stdev->ambient_model_uuid)) {
         if (!((stdev->current_enable & PLUGIN2_MASK) & ~AMBIENT_MASK)) {
             set_ambient_route(stdev->route_hdl, bargein);
         }
@@ -704,9 +762,13 @@ static int tear_package_route(struct knowles_sound_trigger_device *stdev,
      */
     if (check_uuid_equality(uuid, stdev->chre_model_uuid))
         tear_chre_audio_route(stdev->route_hdl, bargein);
-    else if (check_uuid_equality(uuid, stdev->hotword_model_uuid))
-        tear_hotword_route(stdev->route_hdl, bargein);
-    else if (check_uuid_equality(uuid, stdev->ambient_model_uuid)) {
+    else if (check_uuid_equality(uuid, stdev->hotword_model_uuid)) {
+        if (!((stdev->current_enable & PLUGIN1_MASK) & ~HOTWORD_MASK))
+            tear_hotword_route(stdev->route_hdl, bargein);
+    } else if (check_uuid_equality(uuid, stdev->wakeup_model_uuid)) {
+        if (!((stdev->current_enable & PLUGIN1_MASK) & ~WAKEUP_MASK))
+            tear_hotword_route(stdev->route_hdl, bargein);
+    } else if (check_uuid_equality(uuid, stdev->ambient_model_uuid)) {
         if (!((stdev->current_enable & PLUGIN2_MASK) & ~AMBIENT_MASK))
             tear_ambient_route(stdev->route_hdl, bargein);
     } else if (check_uuid_equality(uuid, stdev->entity_model_uuid)) {
@@ -1005,6 +1067,10 @@ static void *callback_thread_loop(void *context)
                             ALOGD("Eventid received is ENTITY_KW_ID %d",
                                 ENTITY_KW_ID);
                             kwid = ENTITY_KW_ID;
+                        } else if (ge.event_id == WAKEUP_KW_ID) {
+                            ALOGD("Eventid received is WAKEUP_KW_ID %d",
+                                WAKEUP_KW_ID);
+                            kwid = WAKEUP_KW_ID;
                         } else {
                             ALOGE("Unknown event id received, ignoring %d",
                                 ge.event_id);
@@ -1033,7 +1099,8 @@ static void *callback_thread_loop(void *context)
 
             if (ge.event_id == OK_GOOGLE_KW_ID ||
                 ge.event_id == AMBIENT_KW_ID ||
-                ge.event_id == ENTITY_KW_ID) {
+                ge.event_id == ENTITY_KW_ID ||
+                ge.event_id == WAKEUP_KW_ID) {
                 ALOGD("%s: Keyword ID %d", __func__, kwid);
 
                 if (ge.data != 0) {
@@ -1041,9 +1108,16 @@ static void *callback_thread_loop(void *context)
                     payload_size = ge.data;
                     payload = malloc(payload_size);
                     if (payload != NULL) {
-                        err = get_entity_param_blk(stdev->odsp_hdl,
-                                            payload,
-                                            payload_size);
+                        if (ge.event_id == AMBIENT_KW_ID ||
+                            ge.event_id == ENTITY_KW_ID)
+                            err = get_entity_param_blk(stdev->odsp_hdl,
+                                                    payload,
+                                                    payload_size);
+                        else if (ge.event_id == OK_GOOGLE_KW_ID ||
+                            ge.event_id == WAKEUP_KW_ID)
+                            err = get_wakeup_param_blk(stdev->odsp_hdl,
+                                                    payload,
+                                                    payload_size);
                         if (err != 0) {
                             ALOGE("Failed to get payload data");
                             free(payload);
@@ -1188,6 +1262,7 @@ static int stop_recognition(struct knowles_sound_trigger_device *stdev,
     destroy_package(stdev, model);
 
     if (!((stdev->current_enable & HOTWORD_MASK) ||
+        (stdev->current_enable & WAKEUP_MASK) ||
         (stdev->current_enable & AMBIENT_MASK) ||
         (stdev->current_enable & ENTITY_MASK))) {
         tear_buffer_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
@@ -1294,6 +1369,9 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
     if (check_uuid_equality(stdev->models[i].uuid,
                             stdev->hotword_model_uuid)) {
         stdev->models[i].kw_id = OK_GOOGLE_KW_ID;
+    } else if (check_uuid_equality(stdev->models[i].uuid,
+                                stdev->wakeup_model_uuid)) {
+        stdev->models[i].kw_id = WAKEUP_KW_ID;
     } else if (check_uuid_equality(stdev->models[i].uuid,
                                 stdev->ambient_model_uuid)) {
         stdev->models[i].kw_id = AMBIENT_KW_ID;
@@ -1495,6 +1573,7 @@ static int stdev_start_recognition(
     handle_input_source(stdev, true);
 
     if (!((stdev->current_enable & HOTWORD_MASK) ||
+        (stdev->current_enable & WAKEUP_MASK) ||
         (stdev->current_enable & AMBIENT_MASK) ||
         (stdev->current_enable & ENTITY_MASK))) {
         set_buffer_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
@@ -1585,6 +1664,9 @@ static int stdev_get_model_state(const struct sound_trigger_hw_device *dev,
     if (check_uuid_equality(model->uuid, stdev->hotword_model_uuid))
         ret = get_model_state(stdev->odsp_hdl, HOTWORD_INSTANCE_ID,
                             HOTWORD_SLOT_ID);
+    else if (check_uuid_equality(model->uuid, stdev->wakeup_model_uuid))
+        ret = get_model_state(stdev->odsp_hdl, HOTWORD_INSTANCE_ID,
+                            WAKEUP_SLOT_ID);
     else if (check_uuid_equality(model->uuid, stdev->ambient_model_uuid))
         ret = get_model_state(stdev->odsp_hdl, AMBIENT_INSTANCE_ID,
                             AMBIENT_SLOT_ID);
@@ -1936,6 +2018,7 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->bc = NOT_CONFIGURED;
 
     str_to_uuid(HOTWORD_AUDIO_MODEL, &stdev->hotword_model_uuid);
+    str_to_uuid(WAKEUP_MODEL, &stdev->wakeup_model_uuid);
     str_to_uuid(SENSOR_MANAGER_MODEL, &stdev->sensor_model_uuid);
     str_to_uuid(AMBIENT_AUDIO_MODEL, &stdev->ambient_model_uuid);
     str_to_uuid(CHRE_AUDIO_MODEL, &stdev->chre_model_uuid);
