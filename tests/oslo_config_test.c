@@ -60,6 +60,7 @@ typedef struct {
 static const oslo_settings_t oslo_driver_settings[] =
 {
     {SENSOR_PARAM_FRAMES_PROCESSED,                         "frames_processed"},
+    {SENSOR_PARAM_PRESET_RADAR_CONFIG,                      "preset_radar_config"},
     {OSLO_CONFIG_DEFAULT,                                   "config_default"},
     {OSLO_CONFIG_PRESENCE,                                  "config_presence"},
     {OSLO_CONFIG_CONTINUOUS,                                "config_continuous"},
@@ -72,11 +73,13 @@ static const oslo_settings_t oslo_driver_settings[] =
     {OSLO_CONFIG_REACH,                                     "config_reach"},
     {OSLO_CONFIG_PRESENCE_V1,                               "config_presence_v1"},
     {OSLO_CONFIG_REACH_V1,                                  "config_reach_v1"},
+    {OSLO_CONFIG_OFF,                                       "config_off"},
     {OSLO_CONTROL_RESTART,                                  "oslo_control_restart"},
     {OSLO_CONTROL_STRIP_HEADERS,                            "oslo_control_strip_headers"},
     {OSLO_CONTROL_SLPI_INT,                                 "oslo_control_slpi_interrupt"},
     {OSLO_CONTROL_STOP,                                     "oslo_control_stop"},
     {OSLO_CONTROL_SIMULATE_RADAR_DATA,                      "oslo_control_simulate_radar_data"},
+    {OSLO_CONTROL_ASSERT_RESET,                             "oslo_control_assert_reset"},
     {OSLO_PARAM_REQUEST_RATE,                               "param_request_rate"},
     {OSLO_PARAM_REQUEST_ANTENNA_MASK,                       "param_request_antenna_mask"},
     {OSLO_PARAM_TX_POWER,                                   "param_tx_power"},
