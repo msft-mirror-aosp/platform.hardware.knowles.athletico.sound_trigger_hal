@@ -93,6 +93,7 @@ include $(BUILD_EXECUTABLE)
 include $(CLEAR_VARS)
 
 LOCAL_PRELINK_MODULE := false
+LOCAL_VENDOR_MODULE := true
 LOCAL_MODULE := sensor_param_test
 LOCAL_SRC_FILES := tests/sensor_param_test.c
 LOCAL_32_BIT_ONLY := true

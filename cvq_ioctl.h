@@ -24,10 +24,11 @@
 #define HOTWORD_MASK 0x1
 #define AMBIENT_MASK 0x2
 #define ENTITY_MASK  0x4
-#define PLUGIN1_MASK (HOTWORD_MASK)
+#define PLUGIN1_MASK (HOTWORD_MASK | WAKEUP_MASK)
 #define PLUGIN2_MASK (AMBIENT_MASK | ENTITY_MASK)
-#define CHRE_MASK  0x8
+#define WAKEUP_MASK  0x8
 #define OSLO_MASK  0x10
+#define CHRE_MASK  0x20
 
 #define HOTWORD_EVT_SRC_ID            IAXXX_SYSID_PLUGIN_INSTANCE_0
 #define AMBIENT_EVT_SRC_ID            IAXXX_SYSID_PLUGIN_INSTANCE_2
@@ -84,10 +85,12 @@
 #define HOTWORD_DETECTION   0
 #define AMBIENT_DETECTION   1
 #define ENTITY_DETECTION    2
+#define WAKEUP_DETECTION    3
 
 #define HOTWORD_SLOT_ID     1
 #define AMBIENT_SLOT_ID     3
 #define ENTITY_SLOT_ID      5
+#define WAKEUP_SLOT_ID      6
 
 #define HOTWORD_UNLOAD_PARAM_ID          1
 #define AMBIENT_UNLOAD_PARAM_ID          1
@@ -179,4 +182,5 @@ int enable_downlink_audio_route(struct audio_route *route_hdl, bool enable);
 
 int flush_model(struct iaxxx_odsp_hw *odsp_hdl, int kw_type);
 int get_entity_param_blk(struct iaxxx_odsp_hw *odsp_hdl, void *payload, unsigned int payload_size);
+int get_wakeup_param_blk(struct iaxxx_odsp_hw *odsp_hdl, void *payload, unsigned int payload_size);
 #endif /* _CVQ_IOCTL_H */

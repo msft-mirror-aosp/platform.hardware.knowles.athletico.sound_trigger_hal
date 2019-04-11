@@ -60,6 +60,13 @@ int write_model(struct iaxxx_odsp_hw *odsp_hdl, unsigned char *data,
                                     AMBIENT_INSTANCE_ID, ENTITY_SLOT_ID,
                                     IAXXX_HMD_BLOCK_ID, data, length);
             break;
+        case 3: //WAKEUP
+            ALOGV("+%s+ WAKEUP_KW_ID", __func__);
+
+            err = iaxxx_odsp_plugin_set_parameter_blk(odsp_hdl,
+                                    HOTWORD_INSTANCE_ID, WAKEUP_SLOT_ID,
+                                    IAXXX_HMD_BLOCK_ID, data, length);
+            break;
         default:
             ALOGE("%s: Unknown KW_ID\n", __func__);
             err = -EINVAL;
@@ -160,7 +167,7 @@ int set_ambient_state(struct iaxxx_odsp_hw *odsp_hdl,
         err = iaxxx_odsp_evt_subscribe(odsp_hdl, AMBIENT_EVT_SRC_ID,
                                     AMBIENT_DETECTION, IAXXX_SYSID_HOST, 0);
         if (err < 0) {
-            ALOGE("%s: ERROR: Ambient subscrive event failed"
+            ALOGE("%s: ERROR: Ambient subscribe event failed"
                 " with error %d(%s)", __func__,
                 errno, strerror(errno));
             goto exit;
@@ -171,7 +178,7 @@ int set_ambient_state(struct iaxxx_odsp_hw *odsp_hdl,
         err = iaxxx_odsp_evt_subscribe(odsp_hdl, AMBIENT_EVT_SRC_ID,
                                     ENTITY_DETECTION, IAXXX_SYSID_HOST, 0);
         if (err < 0) {
-            ALOGE("%s: ERROR: Entity subscrive event failed"
+            ALOGE("%s: ERROR: Entity subscribe event failed"
                 " with error %d(%s)", __func__,
                 errno, strerror(errno));
             goto exit;
@@ -192,7 +199,7 @@ int tear_ambient_state(struct iaxxx_odsp_hw *odsp_hdl,
         err = iaxxx_odsp_evt_unsubscribe(odsp_hdl, AMBIENT_EVT_SRC_ID,
                                         AMBIENT_DETECTION, IAXXX_SYSID_HOST);
         if (err < 0) {
-            ALOGE("%s: ERROR: Ambient unsubscrive event failed"
+            ALOGE("%s: ERROR: Ambient unsubscribe event failed"
                 " with error %d(%s)", __func__,
                 errno, strerror(errno));
             goto exit;
@@ -212,7 +219,7 @@ int tear_ambient_state(struct iaxxx_odsp_hw *odsp_hdl,
         err = iaxxx_odsp_evt_unsubscribe(odsp_hdl, AMBIENT_EVT_SRC_ID,
                                         ENTITY_DETECTION, IAXXX_SYSID_HOST);
         if (err < 0) {
-            ALOGE("%s: ERROR: Entity unsubscrive event failed"
+            ALOGE("%s: ERROR: Entity unsubscribe event failed"
                 " with error %d(%s)", __func__,
                 errno, strerror(errno));
             goto exit;
@@ -286,19 +293,32 @@ int set_hotword_state(struct iaxxx_odsp_hw *odsp_hdl, unsigned int current)
         goto exit;
     }
 
-    ALOGD("Registering for Hotword event\n");
+    if (current & HOTWORD_MASK) {
+        ALOGD("Registering for Hotword event\n");
+        err = iaxxx_odsp_evt_subscribe(odsp_hdl, HOTWORD_EVT_SRC_ID,
+                                    HOTWORD_DETECTION, IAXXX_SYSID_HOST, 0);
+        if (err < 0) {
+            ALOGE("%s: ERROR: HOTWORD subscribe event failed"
+                " with error %d(%s)", __func__,
+                errno, strerror(errno));
+            goto exit;
+        }
 
-    // Subscribe for events
-    err = iaxxx_odsp_evt_subscribe(odsp_hdl, HOTWORD_EVT_SRC_ID,
-                                HOTWORD_DETECTION, IAXXX_SYSID_HOST, 0);
-    if (err != 0) {
-        ALOGE("%s: ERROR: Hotword subscribe event failed with error %d(%s)",
-            __func__, errno, strerror(errno));
-        goto exit;
+    }
+    if (current & WAKEUP_MASK) {
+        ALOGD("Registering for Wakeup event\n");
+        err = iaxxx_odsp_evt_subscribe(odsp_hdl, HOTWORD_EVT_SRC_ID,
+                                    WAKEUP_DETECTION, IAXXX_SYSID_HOST, 0);
+        if (err < 0) {
+            ALOGE("%s: ERROR: WAKEUP subscribe event failed"
+                " with error %d(%s)", __func__,
+                errno, strerror(errno));
+            goto exit;
+        }
     }
 
-exit:
     ALOGV("-%s-", __func__);
+exit:
     return err;
 }
 
@@ -307,15 +327,50 @@ int tear_hotword_state(struct iaxxx_odsp_hw *odsp_hdl, unsigned int current)
     int err = 0;
 
     ALOGV("+%s+ current %x", __func__, current & PLUGIN1_MASK);
+    if (current & HOTWORD_MASK) {
+        err = iaxxx_odsp_evt_unsubscribe(odsp_hdl, HOTWORD_EVT_SRC_ID,
+                                        HOTWORD_DETECTION, IAXXX_SYSID_HOST);
+        if (err < 0) {
+            ALOGE("%s: ERROR: Hotword unsubscribe event failed"
+                " with error %d(%s)", __func__,
+                errno, strerror(errno));
+            goto exit;
+        }
+        err = iaxxx_odsp_plugin_set_parameter(odsp_hdl,
+                                            HOTWORD_INSTANCE_ID,
+                                            HOTWORD_UNLOAD_PARAM_ID,
+                                            HOTWORD_SLOT_ID,
+                                            IAXXX_HMD_BLOCK_ID);
 
-    err = iaxxx_odsp_evt_unsubscribe(odsp_hdl, HOTWORD_EVT_SRC_ID,
-                                    HOTWORD_DETECTION, IAXXX_SYSID_HOST);
-    if (err != 0) {
-        ALOGE("%s: ERROR: Hotword unsubscrive event failed with error %d(%s)",
-            __func__, errno, strerror(errno));
+        if (err < 0) {
+            ALOGE("%s: ERROR: Ambient model unload failed with error %d(%s)",
+                __func__, errno, strerror(errno));
+            goto exit;
+        }
+    }
+    if (current & WAKEUP_MASK) {
+        err = iaxxx_odsp_evt_unsubscribe(odsp_hdl, HOTWORD_EVT_SRC_ID,
+                                        WAKEUP_DETECTION, IAXXX_SYSID_HOST);
+        if (err < 0) {
+            ALOGE("%s: ERROR: WAKEUP unsubscribe event failed"
+                " with error %d(%s)", __func__,
+                errno, strerror(errno));
+            goto exit;
+        }
+        err = iaxxx_odsp_plugin_set_parameter(odsp_hdl,
+                                            HOTWORD_INSTANCE_ID,
+                                            HOTWORD_UNLOAD_PARAM_ID,
+                                            WAKEUP_SLOT_ID,
+                                            IAXXX_HMD_BLOCK_ID);
+        if (err < 0) {
+            ALOGE("%s: ERROR: WAKEUP model unload failed with error %d(%s)",
+                __func__, errno, strerror(errno));
+            goto exit;
+        }
     }
 
     ALOGV("-%s-", __func__);
+exit:
     return err;
 }
 
@@ -559,6 +614,13 @@ int flush_model(struct iaxxx_odsp_hw *odsp_hdl, int kw_type)
                                                 AMBIENT_INSTANCE_ID,
                                                 AMBIENT_UNLOAD_PARAM_ID,
                                                 ENTITY_SLOT_ID,
+                                                IAXXX_HMD_BLOCK_ID);
+            break;
+        case 3: //WAKEUP
+            err = iaxxx_odsp_plugin_set_parameter(odsp_hdl,
+                                                HOTWORD_INSTANCE_ID,
+                                                HOTWORD_UNLOAD_PARAM_ID,
+                                                WAKEUP_SLOT_ID,
                                                 IAXXX_HMD_BLOCK_ID);
             break;
         default:
@@ -1305,6 +1367,23 @@ int get_entity_param_blk(struct iaxxx_odsp_hw *odsp_hdl, void *payload,
     int err = 0;
     err = iaxxx_odsp_plugin_get_parameter_blk(odsp_hdl,
                                             AMBIENT_INSTANCE_ID,
+                                            IAXXX_HMD_BLOCK_ID,
+                                            100, payload,
+                                            payload_size);
+
+    if (err < 0) {
+        ALOGE("%s: Failed to get param blk error %s\n",
+            __func__, strerror(errno));
+    }
+    return err;
+}
+
+int get_wakeup_param_blk(struct iaxxx_odsp_hw *odsp_hdl, void *payload,
+                unsigned int payload_size)
+{
+    int err = 0;
+    err = iaxxx_odsp_plugin_get_parameter_blk(odsp_hdl,
+                                            HOTWORD_INSTANCE_ID,
                                             IAXXX_HMD_BLOCK_ID,
                                             100, payload,
                                             payload_size);
