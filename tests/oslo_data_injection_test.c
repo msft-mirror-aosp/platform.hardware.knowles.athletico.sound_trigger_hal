@@ -38,6 +38,20 @@
 #define FRAME_SIZE_MAX (16 * 1024)
 #define FRAME_PERIOD_MS_MAX (1000)
 #define INJECT_BYTES_PER_SEC_MAX (400 * 1024)  // Reach: 12672 Bytes * 30 Hz = 380160 Bytes/Sec
+#define CHANNEL_NUM 3
+#define BYTES_PER_SAMPLE 2
+
+enum oslo_header_index {
+    OSLO_HEADER_INDEX_SYNC_0 = 0,
+    OSLO_HEADER_INDEX_SYNC_1,
+    OSLO_HEADER_INDEX_FRAME_COUNT,
+    OSLO_HEADER_INDEX_SHAPE_GROUP_COUNT,
+    OSLO_HEADER_INDEX_CHIRP_LENGTH,
+    OSLO_HEADER_INDEX_SADC_VAL,
+    OSLO_HEADER_INDEX_NUM,
+};
+
+const uint16_t SYNC_WORD = 0x0000;
 
 static struct frame_sync {
     pthread_mutex_t mutex;
@@ -91,8 +105,65 @@ static void frame_sync_timer_enable(bool en, uint32_t period_ms) {
     }
 }
 
+static bool frame_data_validate(const uint8_t *data, size_t frame_size) {
+    uint16_t *header = (uint16_t *)data;
+    uint16_t frame_cnt;
+    uint16_t shape_group_count;
+    uint16_t chirp_len;
+    size_t chirp_size;
+    size_t num_chirps_per_frame;
+
+    // Validate 1st header of frame
+    if (header[OSLO_HEADER_INDEX_SYNC_0] != SYNC_WORD ||
+        header[OSLO_HEADER_INDEX_SYNC_1] != SYNC_WORD ||
+        header[OSLO_HEADER_INDEX_SHAPE_GROUP_COUNT] != 0) {
+        ALOGE("%s: Invalid frame header: %04x, %04x, %04x, %04x, %04x, %04x\n", __func__,
+              header[0], header[1], header[2], header[3], header[4], header[5]);
+        fprintf(stderr, "%s: Invalid frame header: %04x, %04x, %04x, %04x, %04x, %04x\n", __func__,
+                header[0], header[1], header[2], header[3], header[4], header[5]);
+        return false;
+    } else {
+        frame_cnt = header[OSLO_HEADER_INDEX_FRAME_COUNT];
+        shape_group_count = header[OSLO_HEADER_INDEX_SHAPE_GROUP_COUNT];
+        chirp_len = header[OSLO_HEADER_INDEX_CHIRP_LENGTH];
+        chirp_size = chirp_len * CHANNEL_NUM * BYTES_PER_SAMPLE;
+        chirp_size += OSLO_HEADER_INDEX_NUM * BYTES_PER_SAMPLE;
+        num_chirps_per_frame = frame_size / chirp_size;
+        ALOGD("%s: frame_cnt: 0x%04x, chirp_len: %d, chirp_size: %d, num_chirps_per_frame: %d\n",
+              __func__, frame_cnt, chirp_len, chirp_size, num_chirps_per_frame);
+    }
+
+    if (frame_size % chirp_size != 0) {
+        ALOGE("frame_size (%d) is not a multiple of the chirp_size (%d)!!!\n", frame_size,
+              chirp_size);
+        fprintf(stderr, "frame_size (%d) is not a multiple of the chirp_size (%d)!!!\n",
+                frame_size, chirp_size);
+        return false;
+    }
+
+    // Validate header of each chirp
+    for (int i = 0; i < num_chirps_per_frame; i++) {
+        if (header[OSLO_HEADER_INDEX_SYNC_0] != SYNC_WORD ||
+            header[OSLO_HEADER_INDEX_SYNC_1] != SYNC_WORD ||
+            header[OSLO_HEADER_INDEX_FRAME_COUNT] != frame_cnt ||
+            header[OSLO_HEADER_INDEX_SHAPE_GROUP_COUNT] != i ||
+            header[OSLO_HEADER_INDEX_CHIRP_LENGTH] != chirp_len) {
+            ALOGE("%s: Invalid %dth header: %04x, %04x, %04x, %04x, %04x, %04x\n", __func__, i,
+                  header[0], header[1], header[2], header[3], header[4], header[5]);
+            fprintf(stderr, "%s: Invalid %dth chirp header: %04x, %04x, %04x, %04x, %04x, %04x\n",
+                    __func__, i, header[0], header[1], header[2], header[3], header[4], header[5]);
+            return false;
+        }
+        data += chirp_size;
+        header = (uint16_t *)data;
+    }
+
+    return true;
+}
+
 static int show_help() {
-    fprintf(stdout, "usage: oslo_data_injection_test <file_name> <frame_period_ms> <frame_size>\n");
+    fprintf(stdout,
+            "usage: oslo_data_injection_test <file_name> <frame_period_ms> <frame_size>\n");
 
     exit(EXIT_FAILURE);
 }
@@ -149,12 +220,6 @@ int main(int argc, char *argv[]) {
         goto out;
     }
     file_size = file_stat.st_size;
-    if (file_size % frame_size != 0) {
-        fprintf(stderr, "File size (%d) is not a multiple of the frame size (%d)!!!\n", file_size,
-                frame_size);
-        ret = -EINVAL;
-        goto out;
-    }
 
     smd = iaxxx_sensor_mgr_init();
     if (NULL == smd) {
@@ -180,6 +245,14 @@ int main(int argc, char *argv[]) {
         if (!frame_data_bytes_remaining) {
             ALOGE("Zero bytes read\n");
             break;
+        }
+        if (frame_data_bytes_remaining != frame_size ||
+            !frame_data_validate(frame_data_buf, frame_size)) {
+            ALOGE("Drop invalid frame, header: %04x, %04x, %04x, %04x, %04x, %04x\n", header[0],
+                  header[1], header[2], header[3], header[4], header[5]);
+            fprintf(stdout, "Drop invalid frame, header: %04x, %04x, %04x, %04x, %04x, %04x\n",
+                    header[0], header[1], header[2], header[3], header[4], header[5]);
+            continue;
         }
         data_ptr = frame_data_buf;
         while (frame_data_bytes_remaining) {
