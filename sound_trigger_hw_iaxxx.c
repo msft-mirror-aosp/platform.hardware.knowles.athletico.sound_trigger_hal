@@ -1255,6 +1255,11 @@ static int stop_recognition(struct knowles_sound_trigger_device *stdev,
         // This avoids any processing of chre/oslo.
         goto exit;
     }
+
+    if (model->is_active == false) {
+        goto exit;
+    }
+
     model->is_active = false;
 
     tear_package_route(stdev, model->uuid, stdev->is_music_playing);
@@ -2089,29 +2094,22 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
 
     switch (event) {
     case AUDIO_EVENT_CAPTURE_DEVICE_INACTIVE:
-    case AUDIO_EVENT_CAPTURE_DEVICE_ACTIVE:
+    case AUDIO_EVENT_CAPTURE_STREAM_INACTIVE:
         /*
          * [TODO] handle capture device on/off event
          * There might be concurrency devices usecase.
+         *
          */
+        ALOGD("%s: handle capture inactive event %d", __func__, event);
         break;
-    case AUDIO_EVENT_CAPTURE_STREAM_INACTIVE:
-        /*
-         * [TODO] Recording is end so enable mic route if it was previously
-         *        disabled.
-         * TBD check Is this required? Because it will get enabled again in
-         * start recognition
-         */
-        ALOGD("%s: handle capture stream inactive", __func__);
-        break;
+    case AUDIO_EVENT_CAPTURE_DEVICE_ACTIVE:
     case AUDIO_EVENT_CAPTURE_STREAM_ACTIVE:
         /*
-         * Handle capture stream on event
+         * Handle capture active event
          * That stop all recognition in codec
          */
-        ALOGD("%s: handle capture stream active", __func__);
+        ALOGD("%s: handle capture active event %d", __func__, event);
 
-        // Disable mic route.
         for (i = 0; i < MAX_MODELS; i++) {
             if (stdev->models[i].is_active == true) {
                 tear_package_route(stdev, stdev->models[i].uuid,
@@ -2122,6 +2120,7 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         }
 
         if (!((stdev->current_enable & HOTWORD_MASK) ||
+            (stdev->current_enable & WAKEUP_MASK) ||
             (stdev->current_enable & AMBIENT_MASK) ||
             (stdev->current_enable & ENTITY_MASK))) {
             tear_buffer_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
