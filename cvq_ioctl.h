@@ -70,7 +70,7 @@
 #define CHRE_BUF_SIZE        60480
 #define CHRE_CONFIGURED      (0x203)
 #define CHRE_DESTROYED       (0x204)
-#define CHRE_EVT_MASK        7
+#define CHRE_EVT_MASK        (0x1f)
 
 #define MIXER_PKG_ID       5
 #define MIXER_PLUGIN_IDX   0
