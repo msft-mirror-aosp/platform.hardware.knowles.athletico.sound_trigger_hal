@@ -59,7 +59,7 @@
 
 #define CVQ_ENDPOINT                    (IAXXX_SYSID_PLUGIN_1_OUT_EP_0)
 #define COMMON_8SEC_BUF_ENDPOINT        (IAXXX_SYSID_PLUGIN_1_OUT_EP_1)
-//#define NEWSIQ_MUSICIQ_BUF_ENDPOINT     (IAXXX_SYSID_PLUGIN_11_OUT_EP_0)
+#define DA_BUF_ENDPOINT                 (IAXXX_SYSID_PLUGIN_3_OUT_EP_1)
 
 #define IAXXX_VQ_EVENT_STR          "IAXXX_VQ_EVENT"
 #define IAXXX_RECOVERY_EVENT_STR    "IAXXX_RECOVERY_EVENT"
@@ -147,6 +147,7 @@ struct knowles_sound_trigger_device {
     bool is_music_playing;
     bool is_bargein_route_enabled;
     bool is_buffer_package_loaded;
+    bool is_da_buffer_enabled;
     bool is_st_hal_ready;
 
     unsigned int current_enable;
@@ -821,6 +822,25 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
                 goto exit;
             }
         }
+        //setup DA buffer and route.
+        if (stdev->is_da_buffer_enabled == false &&
+            stdev->is_music_playing == true &&
+            stdev->is_buffer_package_loaded == true) {
+            err = setup_downlink_buffer(stdev->odsp_hdl);
+            if (err != 0) {
+                ALOGE("Failed to load DA buffer package");
+                goto exit;
+            }
+            stdev->is_da_buffer_enabled = true;
+            err = enable_downlink_audio_route(stdev->route_hdl,
+                                            stdev->is_da_buffer_enabled);
+            if (err != 0) {
+                ALOGE("Failed to enable downlink-audio route");
+                stdev->is_da_buffer_enabled = false;
+                destroy_downlink_buffer(stdev->odsp_hdl);
+                goto exit;
+            }
+        }
     } else {
         if (!is_any_model_active(stdev)) {
             ALOGD("None of keywords are active");
@@ -839,6 +859,23 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
                 err = destroy_aec_package(stdev->odsp_hdl);
                 if (err != 0) {
                     ALOGE("Failed to unload AEC package");
+                    goto exit;
+                }
+            }
+            //disable DA buffer and route.
+            if (stdev->is_music_playing == true &&
+                stdev->is_da_buffer_enabled == true) {
+                stdev->is_da_buffer_enabled = false;
+                err = enable_downlink_audio_route(stdev->route_hdl,
+                                                stdev->is_da_buffer_enabled);
+                if (err != 0) {
+                    ALOGE("Failed to disable downlink-audio route");
+                    stdev->is_da_buffer_enabled = true;
+                    goto exit;
+                }
+                err = destroy_downlink_buffer(stdev->odsp_hdl);
+                if (err != 0) {
+                    ALOGE("Failed to unload DA buffer package");
                     goto exit;
                 }
             }
@@ -911,6 +948,24 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
                                 stdev->is_bargein_route_enabled);
         if (err != 0) {
             ALOGE("Failed to restart bargein route");
+        }
+
+        //setup DA buffer and route.
+        if (stdev->is_da_buffer_enabled == true) {
+            err = setup_downlink_buffer(stdev->odsp_hdl);
+            if (err != 0) {
+                ALOGE("Failed to restart DA buffer package");
+            }
+            err = enable_downlink_audio_route(stdev->route_hdl,
+                                            !stdev->is_da_buffer_enabled);
+            if (err != 0) {
+                ALOGE("Failed to tear downlink-audio route");
+            }
+            err = enable_downlink_audio_route(stdev->route_hdl,
+                                            stdev->is_da_buffer_enabled);
+            if (err != 0) {
+                ALOGE("Failed to restart downlink-audio route");
+            }
         }
     }
 
@@ -2019,6 +2074,7 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->is_music_playing = false;
     stdev->is_bargein_route_enabled = false;
     stdev->is_buffer_package_loaded = false;
+    stdev->is_da_buffer_enabled = false;
     stdev->current_enable = 0;
     stdev->bc = NOT_CONFIGURED;
 
@@ -2133,6 +2189,22 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         if (stdev->is_music_playing != false) {
             stdev->is_music_playing = false;
             if (stdev->is_mic_route_enabled != false) {
+                //Disable DA buffer
+                if (stdev->is_da_buffer_enabled == true) {
+                    stdev->is_da_buffer_enabled = false;
+                    ret = enable_downlink_audio_route(stdev->route_hdl,
+                                                stdev->is_da_buffer_enabled);
+                    if (ret != 0) {
+                        ALOGE("Failed to disable downlink-audio route");
+                        stdev->is_da_buffer_enabled = true;
+                        goto exit;
+                    }
+                    ret = destroy_downlink_buffer(stdev->odsp_hdl);
+                    if (ret != 0) {
+                        ALOGE("Failed to unload DA buffer package");
+                        goto exit;
+                    }
+                }
                 // Atleast one keyword model is active so update the routes
                 // Check if the bargein route is enabled if not enable bargein route
                 // Check each model, if it is active then update it's route
@@ -2210,6 +2282,24 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         if (stdev->is_music_playing != true) {
             stdev->is_music_playing = true;
             if (stdev->is_mic_route_enabled != false) {
+                //setup DA buffer and route.
+                if (stdev->is_da_buffer_enabled == false &&
+                    stdev->is_music_playing == true &&
+                    stdev->is_buffer_package_loaded == true) {
+                    ret = setup_downlink_buffer(stdev->odsp_hdl);
+                    if (ret != 0) {
+                        ALOGE("Failed to load DA buffer package");
+                        goto exit;
+                    }
+                    stdev->is_da_buffer_enabled = true;
+                    ret = enable_downlink_audio_route(stdev->route_hdl,
+                                                    stdev->is_da_buffer_enabled);
+                    if (ret != 0) {
+                        ALOGE("Failed to enable downlink-audio route");
+                        stdev->is_da_buffer_enabled = false;
+                        goto exit;
+                    }
+                }
                 // Atleast one keyword model is active so update the routes
                 // Check if the bargein route is enabled if not enable bargein route
                 // Check each model, if it is active then update it's route
@@ -2312,8 +2402,8 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                         break;
                     case AMBIENT_KW_ID:
                     case ENTITY_KW_ID:
-                        stream_end_point = COMMON_8SEC_BUF_ENDPOINT;
-                        //if downlink audio using another endpoint
+                        stream_end_point = stdev->is_da_buffer_enabled ?
+                                    DA_BUF_ENDPOINT : COMMON_8SEC_BUF_ENDPOINT;
                         break;
                     default:
                         stream_end_point = COMMON_8SEC_BUF_ENDPOINT;
