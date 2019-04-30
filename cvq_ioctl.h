@@ -82,6 +82,8 @@
 #define BUF_INSTANCE_ID     1
 #define BUF_PRIORITY        1
 
+#define DA_BUF_INSTANCE_ID    3
+
 #define HOTWORD_DETECTION   0
 #define AMBIENT_DETECTION   1
 #define ENTITY_DETECTION    2
@@ -159,6 +161,8 @@ int destroy_sensor_package(struct iaxxx_odsp_hw *odsp_hdl);
 int setup_mixer_package(struct iaxxx_odsp_hw *odsp_hdl);
 int destroy_mixer_package(struct iaxxx_odsp_hw *odsp_hdl);
 
+int setup_downlink_buffer(struct iaxxx_odsp_hw *odsp_hdl);
+int destroy_downlink_buffer(struct iaxxx_odsp_hw *odsp_hdl);
 int setup_mic_buffer(struct iaxxx_odsp_hw *odsp_hdl, enum buffer_configuration bc);
 int destroy_mic_buffer(struct iaxxx_odsp_hw *odsp_hdl);
 int set_buffer_route(struct audio_route *route_hdl, bool bargein);
