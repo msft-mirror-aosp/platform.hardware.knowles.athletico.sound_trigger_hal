@@ -65,12 +65,11 @@ int ia_stop_tunneling(struct ia_tunneling_hal *thdl)
 {
     FUNCTION_ENTRY_LOG;
 
-    if (thdl->tunnel_dev) {
+    if (thdl) {
         close(thdl->tunnel_dev);
         thdl->tunnel_dev = 0;
+        free(thdl);
     }
-
-    free(thdl);
 
     return 0;
 }
@@ -84,8 +83,8 @@ int ia_enable_tunneling_source(struct ia_tunneling_hal *thdl,
     struct tunlMsg tm;
     int err = 0;
 
-    if (-1 == thdl->tunnel_dev) {
-        ALOGE("%s: ERROR Tunneling device is not opened", __func__);
+    if (thdl == NULL) {
+        ALOGE("%s: ERROR Tunneling hdl is NULL", __func__);
         err = -EIO;
         goto exit;
     }
@@ -111,8 +110,8 @@ int ia_disable_tunneling_source(struct ia_tunneling_hal *thdl,
     struct tunlMsg tm;
     int err = 0;
 
-    if (-1 == thdl->tunnel_dev) {
-        ALOGE("%s: ERROR Tunneling devices is not opened", __func__);
+    if (thdl == NULL) {
+        ALOGE("%s: ERROR Tunneling hdl is NULL", __func__);
         err = -EIO;
         goto exit;
     }
@@ -142,6 +141,11 @@ int ia_read_tunnel_data(struct ia_tunneling_hal *thdl,
         return -EINVAL;
     }
 
+    if (thdl == NULL) {
+        ALOGE("%s: ERROR Tunneling hdl is NULL", __func__);
+        return -EIO;
+    }
+
     read_bytes = read(thdl->tunnel_dev, buf, buf_sz);
     if (read_bytes == 0) {
         ALOGE("%s: Warning zero bytes read from tunneling device, "
@@ -158,6 +162,12 @@ int ia_set_tunnel_out_buf_threshold(struct ia_tunneling_hal *thdl,
 
     FUNCTION_ENTRY_LOG;
 
+    if (thdl == NULL) {
+        ALOGE("%s: ERROR Tunneling hdl is NULL", __func__);
+        err = -EIO;
+        goto exit;
+    }
+
     err = ioctl(thdl->tunnel_dev, TUNNEL_SET_EVENT_THRESHOLD,
                 threshold);
     if (err == -1) {
@@ -165,5 +175,6 @@ int ia_set_tunnel_out_buf_threshold(struct ia_tunneling_hal *thdl,
             __func__, strerror(errno));
     }
 
+exit:
     return err;
 }
