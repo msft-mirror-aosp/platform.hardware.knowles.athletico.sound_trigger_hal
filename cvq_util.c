@@ -817,7 +817,7 @@ int setup_aec_package(struct iaxxx_odsp_hw *odsp_hdl)
 
     ALOGD("+%s+", __func__);
 
-    err = iaxxx_odsp_package_load(odsp_hdl, AEC_PASSTHROUGH_PACKAGE,
+    err = iaxxx_odsp_package_load(odsp_hdl, ECHOCANCELLER_PACKAGE,
                                 AEC_PKG_ID);
     if (err != 0) {
         ALOGE("%s: ERROR: Failed to load AEC passthrough package %d(%s)",
