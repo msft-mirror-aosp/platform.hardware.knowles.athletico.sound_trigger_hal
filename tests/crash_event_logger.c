@@ -32,8 +32,11 @@
 #define UEVENT_MSG_LEN          (1024)
 #define BUF_SIZE                (4096)
 #define CRASH_LOGGER_DEV        "/dev/crashdump"
-#define CRASH_DUMP_FILE_PREFIX  "/data/data/crash_dump_"
+#define REGDUMP_LOGGER_DEV	"/dev/regdump"
+#define CRASH_DUMP_FILE_PREFIX  "/data/data/dump_crash_"
+#define REG_ACCESS_FILE_PREFIX	"/data/data/dump_reg_access_history_"
 #define BIN_EXTN                ".bin"
+#define TXT_EXTN                ".txt"
 #define MAX_FILENAME_LEN        512
 #define MAX_TIMESTR_LEN         64
 
@@ -200,6 +203,65 @@ exit:
     }
 }
 
+void dump_reg_access_hist_log() {
+    void *buf = NULL;
+    int inp_fp = -1, out_fp = -1;
+    int bytes_read = 0;
+    int err = 0;
+    time_t t;
+    struct tm *tm;
+    char file_name[MAX_FILENAME_LEN];
+    char curr_time[MAX_TIMESTR_LEN];
+
+    buf = malloc(BUF_SIZE);
+    if (!buf) {
+        ALOGE("Failed to allocate buffer exiting");
+        err = -1;
+        goto exit;
+    }
+
+    inp_fp = open(REGDUMP_LOGGER_DEV, O_RDONLY);
+    if (inp_fp == -1) {
+        ALOGE("Failed to open %s with error %d(%s)",
+                REGDUMP_LOGGER_DEV, errno, strerror(errno));
+        goto exit;
+    }
+
+    strcpy(file_name, REG_ACCESS_FILE_PREFIX);
+    t = time(NULL);
+    tm = localtime(&t);
+    strftime(curr_time, 64, "%F_%H_%M_%S", tm);
+    strcat(file_name, curr_time);
+    strcat(file_name, TXT_EXTN);
+
+    out_fp = open(file_name, O_WRONLY | O_CREAT, 0644);
+    if (out_fp == -1) {
+        ALOGE("Failed to open %s for writing", file_name);
+        goto exit;
+    }
+
+    do {
+        bytes_read = read(inp_fp, buf, BUF_SIZE);
+        if (bytes_read > 0)
+            write(out_fp, buf, bytes_read);
+    } while (bytes_read > 0);
+
+    ALOGI("Register access history has been dumped to %s", file_name);
+
+exit:
+    if (out_fp != -1) {
+        close(out_fp);
+    }
+
+    if (inp_fp != -1) {
+        close(inp_fp);
+    }
+
+    if (buf) {
+        free(buf);
+    }
+}
+
 int main(int argc, char** argv) {
     int err = 0;
     int timeout = -1; // Wait for event indefinitely
@@ -211,6 +273,7 @@ int main(int argc, char** argv) {
 
     if ( (argc == 2) && !strcmp(argv[1], "-f")) {
         ALOGD("Read to get the crash logs");
+        dump_reg_access_hist_log();
         dump_crash_log();
         return 0;
     }
@@ -244,6 +307,7 @@ int main(int argc, char** argv) {
             for (i = 0; i < n;) {
                 if (strstr(msg + i, "IAXXX_CRASH_EVENT")) {
                     ALOGD("IAXXX_CRASH_EVENT received trying to get the crash logs");
+                    dump_reg_access_hist_log();
                     dump_crash_log();
                 }
 
