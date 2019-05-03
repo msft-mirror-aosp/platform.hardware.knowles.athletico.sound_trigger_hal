@@ -200,7 +200,7 @@ int enable_downlink_audio_route(struct audio_route *route_hdl, bool enable);
 int flush_model(struct iaxxx_odsp_hw *odsp_hdl, int kw_type);
 int get_entity_param_blk(struct iaxxx_odsp_hw *odsp_hdl, void *payload, unsigned int payload_size);
 int get_wakeup_param_blk(struct iaxxx_odsp_hw *odsp_hdl, void *payload, unsigned int payload_size);
-int power_down_all_non_ctrl_proc_mem(struct audio_route *route_hdl);
+int power_down_all_non_ctrl_proc_mem(struct mixer *mixer);
 int power_on_proc_mem(struct audio_route *route_hdl, int enable, int core);
 int power_off_proc_mem(struct audio_route *route_hdl, int enable, int core);
 int power_off_proc_mem_in_retn(struct audio_route *route_hdl, int enable, int core);
