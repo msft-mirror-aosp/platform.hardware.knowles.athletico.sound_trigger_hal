@@ -95,15 +95,32 @@ int main(int argc, char *argv[]) {
         }
 
         for (i = 0; i < NUM_MPLL_CLK_FREQ; i++){
-            ALOGI("mpll_cumulative_cnts (%d) counter value: %zu\n", i, pwr_stats_count.mpll_cumulative_cnts[i]);
-            fprintf(stdout, "mpll_cumulative_cnts (%d) counter value: %zu\n", i, pwr_stats_count.mpll_cumulative_cnts[i]);
+            ALOGI("mpll_cumulative_cnts (%d) counter value: %"PRIu64"\n", i, pwr_stats_count.mpll_cumulative_cnts[i]);
+            fprintf(stdout, "mpll_cumulative_cnts (%d) counter value: %"PRIu64"\n", i, pwr_stats_count.mpll_cumulative_cnts[i]);
         }
 
         for (i = 0; i < NUM_APLL_CLK_FREQ; i++){
-            ALOGI("apll_cumulative_cnts (%d) counter value: %zu\n", i, pwr_stats_count.apll_cumulative_cnts[i]);
-            fprintf(stdout, "apll_cumulative_cnts (%d) counter value: %zu\n", i, pwr_stats_count.apll_cumulative_cnts[i]);
+            ALOGI("apll_cumulative_cnts (%d) counter value: %"PRIu64"\n", i, pwr_stats_count.apll_cumulative_cnts[i]);
+            fprintf(stdout, "apll_cumulative_cnts (%d) counter value: %"PRIu64"\n", i, pwr_stats_count.apll_cumulative_cnts[i]);
         }
-        ALOGI("POWER STATS COUNT success\n");
+
+        for (i = 0; i < NUM_MPLL_CLK_FREQ; i++){
+            ALOGI("mpllCumulativeDur (%d) Duration  value: %" PRIu64 "\n", i, pwr_stats_count.mpllCumulativeDur[i]);
+            fprintf(stdout, "mpllCumulativeDur (%d) Duration  value %" PRIu64 "\n", i, pwr_stats_count.mpllCumulativeDur[i]);
+        }
+
+        for (i = 0; i < NUM_MPLL_CLK_FREQ; i++){
+            ALOGI("mpllTimeStamp (%d) Last time stamp value : %" PRIu64 "\n", i, pwr_stats_count.mpllTimeStamp[i]);
+            fprintf(stdout, "mpllTimeStamp (%d) Last time stamp value : %"PRIu64"\n", i, pwr_stats_count.mpllTimeStamp[i]);
+        }
+
+        ALOGI("sleepModeTimeStamp, Last time stamp value for Sleep : %" PRIu64 "\n", pwr_stats_count.sleepModeTimeStamp);
+        fprintf(stdout, "sleepModeTimeStamp, Last time stamp value for Sleep : %" PRIu64"\n", pwr_stats_count.sleepModeTimeStamp);
+
+        ALOGI("sleepModeCumulativeDur, Total cumulative sleep duration : %"PRIu64"\n", pwr_stats_count.sleepModeCumulativeDur);
+        fprintf(stdout, "sleepModeCumulativeDur, Total cumulative sleep duration : %"PRIu64"\n", pwr_stats_count.sleepModeCumulativeDur);
+
+	ALOGI("POWER STATS COUNT success\n");
         fprintf(stdout, "POWER STATS COUNT success\n");
     }
 
