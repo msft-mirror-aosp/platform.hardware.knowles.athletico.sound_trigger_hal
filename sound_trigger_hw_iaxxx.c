@@ -1157,6 +1157,7 @@ static void *callback_thread_loop(void *context)
                     ALOGD("Firmware has crashed");
                     // Don't allow any op on ST HAL until recovery is complete
                     stdev->is_st_hal_ready = false;
+                    stdev->is_streaming = false;
                 }
 
                 i += strlen(msg + i) + 1;
