@@ -108,7 +108,7 @@
 #define AMBIENT_DA_PACKAGE          "AmbientDAPackage.bin"
 #define SENSOR_PACKAGE              "OsloSensorPackage.bin"
 #define SENSOR_CONFIG_VAL           "OsloSensorConfig.bin"
-#define AEC_PASSTHROUGH_PACKAGE     "PassthruPackage.bin"
+#define ECHOCANCELLER_PACKAGE       "EchoCancellerPackage.bin"
 #define MIXER_PACKAGE               "AScalarSimpleMixerPackage.bin"
 
 #define MIC_ROUTE                            "mic1-route"
@@ -125,6 +125,19 @@
 #define AMBIENT_WITHOUT_BARGEIN_ROUTE        "ambient-route-without-bargein"
 #define BUFFER_WITH_BARGEIN_ROUTE            "buffer-route-with-bargein"
 #define BUFFER_WITHOUT_BARGEIN_ROUTE         "buffer-route-without-bargein"
+#define POWER_DOWN_ROUTE                     "pwr-dwn-all-non-ctrl-proc-mem"
+#define POWER_ON_HMD_PROC_MEM                "pwr-up-hmd-proc-mem"
+#define POWER_ON_SSP_PROC_MEM                "pwr-up-ssp-proc-mem"
+#define POWER_ON_DMX_PROC_MEM                "pwr-up-dmx-proc-mem"
+#define POWER_OFF_HMD_PROC_MEM               "pwr-dwn-hmd-proc-mem"
+#define POWER_OFF_SSP_PROC_MEM               "pwr-dwn-ssp-proc-mem"
+#define POWER_OFF_DMX_PROC_MEM               "pwr-dwn-dmx-proc-mem"
+#define POWER_OFF_SSP_PROC_MEM_IN_RETN       "pwr-dwn-ssp-proc-mem-in-retn"
+#define POWER_OFF_DMX_PROC_MEM_IN_RETN       "pwr-dwn-dmx-proc-mem-in-retn"
+#define POWER_OFF_HMD_PROC_MEM_IN_RETN       "pwr-dwn-hmd-proc-mem-in-retn"
+#define POWER_ON_HMD_PROC_MEM_OUT_OFF_RETN   "pwr-on-hmd-proc-mem-out-off-retn"
+#define POWER_ON_DMX_PROC_MEM_OUT_OFF_RETN   "pwr-on-dmx-proc-mem-out-off-retn"
+#define POWER_ON_SSP_PROC_MEM_OUT_OFF_RETN   "pwr-on-ssp-proc-mem-out-off-retn"
 
 enum clock_type {
     INTERNAL_OSCILLATOR,
@@ -187,4 +200,9 @@ int enable_downlink_audio_route(struct audio_route *route_hdl, bool enable);
 int flush_model(struct iaxxx_odsp_hw *odsp_hdl, int kw_type);
 int get_entity_param_blk(struct iaxxx_odsp_hw *odsp_hdl, void *payload, unsigned int payload_size);
 int get_wakeup_param_blk(struct iaxxx_odsp_hw *odsp_hdl, void *payload, unsigned int payload_size);
+int power_down_all_non_ctrl_proc_mem(struct mixer *mixer);
+int power_on_proc_mem(struct audio_route *route_hdl, int enable, int core);
+int power_off_proc_mem(struct audio_route *route_hdl, int enable, int core);
+int power_off_proc_mem_in_retn(struct audio_route *route_hdl, int enable, int core);
+int power_on_proc_mem_out_off_retn(struct audio_route *route_hdl, int enable, int core);
 #endif /* _CVQ_IOCTL_H */

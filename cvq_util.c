@@ -817,7 +817,7 @@ int setup_aec_package(struct iaxxx_odsp_hw *odsp_hdl)
 
     ALOGD("+%s+", __func__);
 
-    err = iaxxx_odsp_package_load(odsp_hdl, AEC_PASSTHROUGH_PACKAGE,
+    err = iaxxx_odsp_package_load(odsp_hdl, ECHOCANCELLER_PACKAGE,
                                 AEC_PKG_ID);
     if (err != 0) {
         ALOGE("%s: ERROR: Failed to load AEC passthrough package %d(%s)",
@@ -1451,4 +1451,147 @@ int get_wakeup_param_blk(struct iaxxx_odsp_hw *odsp_hdl, void *payload,
             __func__, strerror(errno));
     }
     return err;
+}
+
+int power_down_all_non_ctrl_proc_mem(struct mixer *mixer)
+{
+    int ret = 0;
+    struct mixer_ctl* ctl;
+
+    ALOGD("+Entering %s+", __func__);
+
+    if (!mixer) {
+        ALOGE("%s mixer is NULL", __func__);
+        return -EINVAL;
+    }
+
+    ctl = mixer_get_ctl_by_name(mixer, "SSP Core Boot");
+    if (ctl) {
+       ret = mixer_ctl_set_enum_by_string(ctl, "CoreMemOff");
+       if (ret)
+          ALOGE("%s: update SSP fail! ret = %d", __func__, ret);
+    } else {
+          ALOGE("%s: get SSP control fail", __func__);
+          ret = -ENODEV;
+    }
+
+    ctl = mixer_get_ctl_by_name(mixer, "HMD Core Boot");
+    if (ctl) {
+       ret = mixer_ctl_set_enum_by_string(ctl, "CoreMemOff");
+       if (ret)
+          ALOGE("%s: update HMD fail! ret = %d", __func__, ret);
+    } else {
+          ALOGE("%s: get HMD control fail", __func__);
+          ret = -ENODEV;
+    }
+
+    ctl = mixer_get_ctl_by_name(mixer, "DMX Core Boot");
+    if (ctl) {
+       ret = mixer_ctl_set_enum_by_string(ctl, "CoreMemOff");
+       if (ret)
+          ALOGE("%s: update DMX fail! ret = %d", __func__, ret);
+    } else {
+          ALOGE("%s: get DMX control fail", __func__);
+          ret = -ENODEV;
+    }
+
+    ALOGD("-Exiting %s-", __func__);
+    return ret;
+}
+
+int power_on_proc_mem(struct audio_route *route_hdl, int enable, int core)
+{
+    ALOGD("+Entering %s+", __func__);
+    if (enable) {
+        if (core == IAXXX_SSP_ID) {
+            audio_route_apply_and_update_path(route_hdl, POWER_ON_SSP_PROC_MEM);
+        } else if (core == IAXXX_HMD_ID) {
+            audio_route_apply_and_update_path(route_hdl, POWER_ON_HMD_PROC_MEM);
+        } else if (core == IAXXX_DMX_ID) {
+            audio_route_apply_and_update_path(route_hdl, POWER_ON_DMX_PROC_MEM);
+        }
+    } else {
+        if (core == IAXXX_SSP_ID) {
+            audio_route_reset_and_update_path(route_hdl, POWER_ON_SSP_PROC_MEM);
+        } else if (core == IAXXX_HMD_ID) {
+            audio_route_reset_and_update_path(route_hdl, POWER_ON_HMD_PROC_MEM);
+        } else if (core == IAXXX_DMX_ID) {
+            audio_route_reset_and_update_path(route_hdl, POWER_ON_DMX_PROC_MEM);
+        }
+    }
+    ALOGD("-Exiting %s-", __func__);
+    return 0;
+}
+
+int power_off_proc_mem(struct audio_route *route_hdl, int enable, int core)
+{
+    ALOGD("+Entering %s+", __func__);
+    if (enable) {
+        if (core == IAXXX_SSP_ID) {
+            audio_route_apply_and_update_path(route_hdl, POWER_OFF_SSP_PROC_MEM);
+        } else if (core == IAXXX_HMD_ID) {
+            audio_route_apply_and_update_path(route_hdl, POWER_OFF_HMD_PROC_MEM);
+        } else if (core == IAXXX_DMX_ID) {
+            audio_route_apply_and_update_path(route_hdl, POWER_OFF_DMX_PROC_MEM);
+        }
+    } else {
+        if (core == IAXXX_SSP_ID) {
+            audio_route_reset_and_update_path(route_hdl, POWER_OFF_SSP_PROC_MEM);
+        } else if (core == IAXXX_HMD_ID) {
+            audio_route_reset_and_update_path(route_hdl, POWER_OFF_HMD_PROC_MEM);
+        } else if (core == IAXXX_DMX_ID) {
+            audio_route_reset_and_update_path(route_hdl, POWER_OFF_DMX_PROC_MEM);
+        }
+    }
+    ALOGD("-Exiting %s-", __func__);
+    return 0;
+}
+
+int power_off_proc_mem_in_retn(struct audio_route *route_hdl, int enable, int core)
+{
+    ALOGD("+Entering %s+", __func__);
+    if (enable) {
+        if (core == IAXXX_SSP_ID) {
+            audio_route_apply_and_update_path(route_hdl, POWER_OFF_SSP_PROC_MEM_IN_RETN);
+        } else if (core == IAXXX_HMD_ID) {
+            audio_route_apply_and_update_path(route_hdl, POWER_OFF_HMD_PROC_MEM_IN_RETN);
+        } else if (core == IAXXX_DMX_ID) {
+            audio_route_apply_and_update_path(route_hdl, POWER_OFF_DMX_PROC_MEM_IN_RETN);
+        }
+    } else {
+        if (core == IAXXX_SSP_ID) {
+            audio_route_reset_and_update_path(route_hdl, POWER_OFF_SSP_PROC_MEM_IN_RETN);
+        } else if (core == IAXXX_HMD_ID) {
+            audio_route_reset_and_update_path(route_hdl, POWER_OFF_HMD_PROC_MEM_IN_RETN);
+        } else if (core == IAXXX_DMX_ID) {
+            audio_route_reset_and_update_path(route_hdl, POWER_OFF_DMX_PROC_MEM_IN_RETN);
+        }
+    }
+    ALOGD("-Exiting %s-", __func__);
+    return 0;
+}
+
+int power_on_proc_mem_out_off_retn(struct audio_route *route_hdl, int enable, int core)
+{
+    ALOGD("+Entering %s+", __func__);
+    if (enable) {
+        if (core == IAXXX_SSP_ID) {
+            audio_route_apply_and_update_path(route_hdl, POWER_ON_SSP_PROC_MEM_OUT_OFF_RETN);
+        } else if (core == IAXXX_HMD_ID) {
+            audio_route_apply_and_update_path(route_hdl, POWER_ON_HMD_PROC_MEM_OUT_OFF_RETN);
+        } else if (core == IAXXX_DMX_ID) {
+            audio_route_apply_and_update_path(route_hdl, POWER_ON_DMX_PROC_MEM_OUT_OFF_RETN);
+        }
+
+    } else {
+        if (core == IAXXX_SSP_ID) {
+            audio_route_reset_and_update_path(route_hdl, POWER_ON_SSP_PROC_MEM_OUT_OFF_RETN);
+        } else if (core == IAXXX_HMD_ID) {
+            audio_route_reset_and_update_path(route_hdl, POWER_ON_HMD_PROC_MEM_OUT_OFF_RETN);
+        } else if (core == IAXXX_DMX_ID) {
+            audio_route_reset_and_update_path(route_hdl, POWER_ON_DMX_PROC_MEM_OUT_OFF_RETN);
+        }
+    }
+    ALOGD("-Exiting %s-", __func__);
+    return 0;
 }

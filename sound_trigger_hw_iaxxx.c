@@ -149,12 +149,15 @@ struct knowles_sound_trigger_device {
     bool is_buffer_package_loaded;
     bool is_da_buffer_enabled;
     bool is_st_hal_ready;
+    bool is_hmd_proc_on;
+    bool is_dmx_proc_on;
 
     unsigned int current_enable;
 
     enum buffer_configuration bc;
 
     struct audio_route *route_hdl;
+    struct mixer *mixer;
     struct iaxxx_odsp_hw *odsp_hdl;
 
     void *audio_hal_handle;
@@ -910,6 +913,11 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
 
     stdev->current_enable = 0;
 
+    if (stdev->is_hmd_proc_on == true) {
+        power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
+        power_on_proc_mem(stdev->route_hdl, true, IAXXX_HMD_ID);
+    }
+
     if (stdev->is_music_playing == true &&
         stdev->is_bargein_route_enabled == true) {
         ct = EXTERNAL_OSCILLATOR;
@@ -1028,6 +1036,7 @@ static int fw_crash_recovery(struct knowles_sound_trigger_device *stdev)
 {
     int err = 0;
 
+    power_down_all_non_ctrl_proc_mem(stdev->mixer);
     // Redownload the keyword model files and start recognition
     err = restart_recognition(stdev);
     if (err != 0) {
@@ -1085,6 +1094,7 @@ static void *callback_thread_loop(void *context)
 
     ge.event_id = -1;
 
+    power_down_all_non_ctrl_proc_mem(stdev->mixer);
     pthread_mutex_unlock(&stdev->lock);
 
     while (1) {
@@ -1147,6 +1157,7 @@ static void *callback_thread_loop(void *context)
                     ALOGD("Firmware has crashed");
                     // Don't allow any op on ST HAL until recovery is complete
                     stdev->is_st_hal_ready = false;
+                    stdev->is_streaming = false;
                 }
 
                 i += strlen(msg + i) + 1;
@@ -1405,6 +1416,11 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         stdev->models[i].data_sz = kw_model_sz;
     }
 
+    if (stdev->is_hmd_proc_on == false) {
+        power_on_proc_mem(stdev->route_hdl, true, IAXXX_HMD_ID);
+        stdev->is_hmd_proc_on = true;
+    }
+
     if (stdev->is_buffer_package_loaded == false) {
         ret = setup_buffer_package(stdev->odsp_hdl);
         if (ret != 0) {
@@ -1481,6 +1497,11 @@ exit:
             destroy_buffer_package(stdev->odsp_hdl);
             stdev->is_buffer_package_loaded = false;
         }
+
+        if (!is_any_model_loaded(stdev) && stdev->is_hmd_proc_on) {
+            power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
+            stdev->is_hmd_proc_on = false;
+        }
     }
     pthread_mutex_unlock(&stdev->lock);
     ALOGD("-%s handle %d-", __func__, *handle);
@@ -1553,6 +1574,12 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
     if (!is_any_model_loaded(stdev) && stdev->is_buffer_package_loaded) {
         destroy_buffer_package(stdev->odsp_hdl);
         stdev->is_buffer_package_loaded = false;
+
+    }
+
+    if (!is_any_model_loaded(stdev) && stdev->is_hmd_proc_on) {
+            power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
+            stdev->is_hmd_proc_on = false;
     }
 
     ALOGD("%s: Successfully unloaded the model, handle - %d",
@@ -1838,7 +1865,7 @@ static int open_streaming_lib(struct knowles_sound_trigger_device *stdev) {
     return ret;
 }
 
-static void find_stdev_mixer_path(int card_num, char *mixer_path_xml)
+static struct mixer* find_stdev_mixer_path(int card_num, char *mixer_path_xml)
 {
     struct mixer *mixer = NULL;
     const char *in_snd_card_name;
@@ -1853,7 +1880,7 @@ static void find_stdev_mixer_path(int card_num, char *mixer_path_xml)
     if (!mixer) {
         ALOGE("%s: Unable to open the mixer: %d", __func__,
             card_num);
-        return;
+        return NULL;
     }
 
     in_snd_card_name = mixer_get_name(mixer);
@@ -1889,10 +1916,9 @@ static void find_stdev_mixer_path(int card_num, char *mixer_path_xml)
     ALOGD("%s: using %s", __func__, mixer_path_xml);
 
 on_error:
-    if (mixer)
-        mixer_close(mixer);
     if (snd_card_name)
         free(snd_card_name);
+    return mixer;
 }
 
 static int find_sound_card() {
@@ -2077,6 +2103,8 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->is_da_buffer_enabled = false;
     stdev->current_enable = 0;
     stdev->bc = NOT_CONFIGURED;
+    stdev->is_hmd_proc_on = false;
+    stdev->is_dmx_proc_on = false;
 
     str_to_uuid(HOTWORD_AUDIO_MODEL, &stdev->hotword_model_uuid);
     str_to_uuid(WAKEUP_MODEL, &stdev->wakeup_model_uuid);
@@ -2091,7 +2119,13 @@ static int stdev_open(const hw_module_t *module, const char *name,
         ret = -EIO;
         goto error;
     }
-    find_stdev_mixer_path(snd_card_num, mixer_path_xml);
+    stdev->mixer = find_stdev_mixer_path(snd_card_num, mixer_path_xml);
+    if (stdev->mixer == NULL) {
+        ALOGE("Failed to init the mixer");
+        ret = -EAGAIN;
+        goto error;
+    }
+
     stdev->route_hdl = audio_route_init(snd_card_num, mixer_path_xml);
     if (stdev->route_hdl == NULL) {
         ALOGE("Failed to init the audio_route library");
@@ -2120,6 +2154,8 @@ error:
         audio_route_free(stdev->route_hdl);
     if (stdev->odsp_hdl)
         iaxxx_odsp_deinit(stdev->odsp_hdl);
+    if (stdev->mixer)
+        mixer_close(stdev->mixer);
 
     pthread_mutex_unlock(&stdev->lock);
     return ret;
