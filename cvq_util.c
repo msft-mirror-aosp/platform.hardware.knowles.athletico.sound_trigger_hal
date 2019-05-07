@@ -1186,7 +1186,7 @@ exit:
     return err;
 }
 
-int setup_downlink_buffer(struct iaxxx_odsp_hw *odsp_hdl)
+int setup_music_buffer(struct iaxxx_odsp_hw *odsp_hdl)
 {
     int err = 0;
     struct iaxxx_create_config_data cdata;
@@ -1224,7 +1224,7 @@ exit:
     return err;
 }
 
-int destroy_downlink_buffer(struct iaxxx_odsp_hw *odsp_hdl)
+int destroy_music_buffer(struct iaxxx_odsp_hw *odsp_hdl)
 {
     int err = 0;
 
@@ -1244,26 +1244,15 @@ exit:
     return err;
 }
 
-int setup_mic_buffer(struct iaxxx_odsp_hw *odsp_hdl, enum buffer_configuration bc)
+int setup_howord_buffer(struct iaxxx_odsp_hw *odsp_hdl)
 {
     struct iaxxx_create_config_data cdata;
     int err = 0;
 
     ALOGD("+%s+", __func__);
 
-    if (bc == NOT_CONFIGURED) {
-        err = -EINVAL;
-        ALOGE("%s: ERROR Invalid buffer configuration sent", __func__);
-        goto exit;
-    }
-
     cdata.type = CONFIG_FILE;
-    if (bc == MULTI_SECOND) {
-        cdata.data.fdata.filename = BUFFER_CONFIG_VAL_MULTI_SEC;
-    } else if (bc == TWO_SECOND) {
-        cdata.data.fdata.filename = BUFFER_CONFIG_VAL_2_SEC;
-    }
-
+    cdata.data.fdata.filename = BUFFER_CONFIG_VAL_2_SEC;
     err = iaxxx_odsp_plugin_set_creation_config(odsp_hdl,
                                                 BUF_INSTANCE_ID,
                                                 IAXXX_HMD_BLOCK_ID,
@@ -1290,7 +1279,7 @@ exit:
     return err;
 }
 
-int destroy_mic_buffer(struct iaxxx_odsp_hw *odsp_hdl)
+int destroy_howord_buffer(struct iaxxx_odsp_hw *odsp_hdl)
 {
     int err = 0;
 
@@ -1311,7 +1300,7 @@ exit:
     return err;
 }
 
-int set_buffer_route(struct audio_route *route_hdl, bool bargein)
+int set_hotword_buffer_route(struct audio_route *route_hdl, bool bargein)
 {
     int err = 0;
 
@@ -1330,7 +1319,7 @@ int set_buffer_route(struct audio_route *route_hdl, bool bargein)
     return err;
 }
 
-int tear_buffer_route(struct audio_route *route_hdl, bool bargein)
+int tear_hotword_buffer_route(struct audio_route *route_hdl, bool bargein)
 {
     int err = 0;
 
@@ -1361,22 +1350,39 @@ int enable_bargein_route(struct audio_route *route_hdl, bool enable)
     if (err)
         ALOGE("%s: route fail %d", __func__, err);
 
+    ALOGD("-%s-", __func__);
+    return err;
+}
+
+int set_music_buffer_route(struct audio_route *route_hdl, bool downlink)
+{
+    int err = 0;
+
+    ALOGD("+%s+ %d", __func__, downlink);
+    if (downlink)
+        err = audio_route_apply_and_update_path(route_hdl,
+                                                DOWNLINK_AUDIO_ROUTE);
+    else
+        err = audio_route_apply_and_update_path(route_hdl,
+                                                MUSIC_AUDIO_ROUTE);
+    if (err)
+        ALOGE("%s: route fail %d", __func__, err);
 
     ALOGD("-%s-", __func__);
     return err;
 }
 
-int enable_downlink_audio_route(struct audio_route *route_hdl, bool enable)
+int tear_music_buffer_route(struct audio_route *route_hdl, bool downlink)
 {
     int err = 0;
 
-    ALOGD("+%s+ %d", __func__, enable);
-    if (enable)
-        err = audio_route_apply_and_update_path(route_hdl,
+    ALOGD("+%s+ %d", __func__, downlink);
+    if (downlink)
+        err = audio_route_reset_and_update_path(route_hdl,
                                                 DOWNLINK_AUDIO_ROUTE);
     else
         err = audio_route_reset_and_update_path(route_hdl,
-                                                DOWNLINK_AUDIO_ROUTE);
+                                                MUSIC_AUDIO_ROUTE);
     if (err)
         ALOGE("%s: route fail %d", __func__, err);
 

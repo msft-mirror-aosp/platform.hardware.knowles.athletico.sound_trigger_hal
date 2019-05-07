@@ -116,6 +116,7 @@
 #define MIC_ROUTE_INT_CLK                    "mic-route-internal-clock"
 #define BARGEIN_ROUTE                        "bargein-route"
 #define DOWNLINK_AUDIO_ROUTE                 "downlink-audio-route"
+#define MUSIC_AUDIO_ROUTE                    "music-audio-route"
 #define SENSOR_ROTUE                         "oslo-route"
 #define HOTWORD_WITH_BARGEIN_ROUTE           "hotword-route-with-bargein"
 #define HOTWORD_WITHOUT_BARGEIN_ROUTE        "hotword-route-without-bargein"
@@ -144,12 +145,6 @@ enum clock_type {
     EXTERNAL_OSCILLATOR
 };
 
-enum buffer_configuration {
-    TWO_SECOND,
-    MULTI_SECOND,    // Configuration of 8 + 2
-    NOT_CONFIGURED
-};
-
 #define PLUGIN_DEF_CONFIG_ID    0
 
 int write_model(struct iaxxx_odsp_hw *odsp_hdl, unsigned char *data,
@@ -174,12 +169,12 @@ int destroy_sensor_package(struct iaxxx_odsp_hw *odsp_hdl);
 int setup_mixer_package(struct iaxxx_odsp_hw *odsp_hdl);
 int destroy_mixer_package(struct iaxxx_odsp_hw *odsp_hdl);
 
-int setup_downlink_buffer(struct iaxxx_odsp_hw *odsp_hdl);
-int destroy_downlink_buffer(struct iaxxx_odsp_hw *odsp_hdl);
-int setup_mic_buffer(struct iaxxx_odsp_hw *odsp_hdl, enum buffer_configuration bc);
-int destroy_mic_buffer(struct iaxxx_odsp_hw *odsp_hdl);
-int set_buffer_route(struct audio_route *route_hdl, bool bargein);
-int tear_buffer_route(struct audio_route *route_hdl, bool bargein);
+int setup_music_buffer(struct iaxxx_odsp_hw *odsp_hdl);
+int destroy_music_buffer(struct iaxxx_odsp_hw *odsp_hdl);
+int setup_howord_buffer(struct iaxxx_odsp_hw *odsp_hdl);
+int destroy_howord_buffer(struct iaxxx_odsp_hw *odsp_hdl);
+int set_hotword_buffer_route(struct audio_route *route_hdl, bool bargein);
+int tear_hotword_buffer_route(struct audio_route *route_hdl, bool bargein);
 int enable_mic_route(struct audio_route *route_hdl, bool enable,
                     enum clock_type ct);
 int set_sensor_route(struct audio_route *route_hdl, bool enable);
@@ -195,7 +190,8 @@ int set_chre_audio_route(struct audio_route *route_hdl, bool bargein);
 int tear_chre_audio_route(struct audio_route *route_hdl, bool bargein);
 int reset_ambient_plugin(struct iaxxx_odsp_hw *odsp_hdl);
 int enable_bargein_route(struct audio_route *route_hdl, bool enable);
-int enable_downlink_audio_route(struct audio_route *route_hdl, bool enable);
+int set_music_buffer_route(struct audio_route *route_hdl, bool downlink);
+int tear_music_buffer_route(struct audio_route *route_hdl, bool downlink);
 
 int flush_model(struct iaxxx_odsp_hw *odsp_hdl, int kw_type);
 int get_entity_param_blk(struct iaxxx_odsp_hw *odsp_hdl, void *payload, unsigned int payload_size);
