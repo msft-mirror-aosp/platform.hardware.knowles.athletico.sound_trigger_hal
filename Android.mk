@@ -242,6 +242,7 @@ include $(BUILD_EXECUTABLE)
 
 include $(CLEAR_VARS)
 LOCAL_MODULE := get_pwr_stats
+LOCAL_VENDOR_MODULE := true
 LOCAL_SRC_FILES := tests/get_pwr_stats.c
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/
 LOCAL_32_BIT_ONLY := true
