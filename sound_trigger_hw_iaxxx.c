@@ -155,8 +155,6 @@ struct knowles_sound_trigger_device {
     bool is_sensor_route_enabled;
     bool is_src_package_loaded;
     bool is_st_hal_ready;
-    bool is_hmd_proc_on;
-    bool is_dmx_proc_on;
     int hotword_buffer_enable;
     int music_buffer_enable;
     bool is_sensor_destroy_in_prog;
@@ -1215,11 +1213,6 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
     stdev->hotword_buffer_enable = 0;
     stdev->music_buffer_enable = 0;
 
-    if (stdev->is_hmd_proc_on == true) {
-        power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
-        power_on_proc_mem(stdev->route_hdl, true, IAXXX_HMD_ID);
-    }
-
     if (stdev->is_music_playing == true &&
         stdev->is_bargein_route_enabled == true) {
         ct = EXTERNAL_OSCILLATOR;
@@ -1413,7 +1406,7 @@ static int crash_recovery(struct knowles_sound_trigger_device *stdev)
     int err = 0;
 
     set_default_apll_clk(stdev->mixer);
-    power_down_all_non_ctrl_proc_mem(stdev->mixer);
+
     // Redownload the keyword model files and start recognition
     err = restart_recognition(stdev);
     if (err != 0) {
@@ -1427,19 +1420,6 @@ static int crash_recovery(struct knowles_sound_trigger_device *stdev)
 
 exit:
     return err;
-}
-
-static void check_and_turn_off_hmd(struct knowles_sound_trigger_device *stdev)
-{
-    ALOGD("+%s+", __func__);
-
-    // Switch the processor off only if all packages are unloaded
-    if (!is_any_model_loaded(stdev) && stdev->is_hmd_proc_on) {
-        power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
-        stdev->is_hmd_proc_on = false;
-    }
-
-    ALOGD("-%s-", __func__);
 }
 
 static void remove_buffer(struct knowles_sound_trigger_device *stdev)
@@ -1488,7 +1468,6 @@ static void destroy_sensor_model(struct knowles_sound_trigger_device *stdev)
 
     stdev->is_sensor_destroy_in_prog = false;
     remove_buffer(stdev);
-    check_and_turn_off_hmd(stdev);
 
     // There could be another thread waiting for us to destroy so signal that
     // thread, if no one is waiting then this signal will have no effect
@@ -1660,7 +1639,6 @@ static void *callback_thread_loop(void *context)
         }
 
         set_default_apll_clk(stdev->mixer);
-        power_down_all_non_ctrl_proc_mem(stdev->mixer);
 
         stdev->is_st_hal_ready = true;
     }
@@ -1759,7 +1737,6 @@ static void *callback_thread_loop(void *context)
                     ALOGD("Firmware downloaded successfully");
                     stdev->is_st_hal_ready = true;
                     set_default_apll_clk(stdev->mixer);
-                    power_down_all_non_ctrl_proc_mem(stdev->mixer);
                 } else if (strstr(msg + i, IAXXX_FW_CRASH_EVENT_STR)) {
                     ALOGD("Firmware has crashed");
                     // Don't allow any op on ST HAL until recovery is complete
@@ -2038,11 +2015,6 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         stdev->models[i].data_sz = kw_model_sz;
     }
 
-    if (stdev->is_hmd_proc_on == false) {
-        power_on_proc_mem(stdev->route_hdl, true, IAXXX_HMD_ID);
-        stdev->is_hmd_proc_on = true;
-    }
-
     if (stdev->is_buffer_package_loaded == false) {
         ret = setup_buffer_package(stdev->odsp_hdl);
         if (ret != 0) {
@@ -2123,10 +2095,6 @@ exit:
         if (!is_any_model_loaded(stdev) && stdev->is_src_package_loaded) {
             destory_src_package(stdev->odsp_hdl);
             stdev->is_src_package_loaded = false;
-        }
-        if (!is_any_model_loaded(stdev) && stdev->is_hmd_proc_on) {
-            power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
-            stdev->is_hmd_proc_on = false;
         }
     }
     pthread_mutex_unlock(&stdev->lock);
@@ -2241,11 +2209,6 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
     if (!is_any_model_loaded(stdev) && stdev->is_src_package_loaded) {
         destory_src_package(stdev->odsp_hdl);
         stdev->is_src_package_loaded = false;
-    }
-
-    if (!is_any_model_loaded(stdev) && stdev->is_hmd_proc_on) {
-            power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
-            stdev->is_hmd_proc_on = false;
     }
 
     ALOGD("%s: Successfully unloaded the model, handle - %d",
@@ -2805,8 +2768,6 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->current_enable = 0;
     stdev->is_sensor_route_enabled = false;
     stdev->recover_model_list = 0;
-    stdev->is_hmd_proc_on = false;
-    stdev->is_dmx_proc_on = false;
     stdev->is_media_recording = false;
     stdev->is_concurrent_capture = hw_properties.concurrent_capture;
 
