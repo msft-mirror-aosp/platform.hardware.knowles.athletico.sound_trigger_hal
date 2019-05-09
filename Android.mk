@@ -216,6 +216,7 @@ LOCAL_MODULE := crash_event_logger
 LOCAL_SRC_FILES := tests/crash_event_logger.c
 LOCAL_32_BIT_ONLY := true
 LOCAL_SHARED_LIBRARIES := liblog libcutils
+LOCAL_MODULE_TAGS := optional
 
 include $(BUILD_EXECUTABLE)
 
