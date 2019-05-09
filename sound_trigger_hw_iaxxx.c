@@ -151,7 +151,6 @@ struct knowles_sound_trigger_device {
     bool is_dmx_proc_on;
     int hotword_buffer_enable;
     int music_buffer_enable;
-    bool is_chre_enable;
 
     unsigned int current_enable;
 
@@ -554,22 +553,6 @@ static int setup_buffer(struct knowles_sound_trigger_device *stdev,
                 ALOGE("Failed to create the buffer plugin");
                 goto exit;
             }
-
-            if ((stdev->is_bargein_route_enabled) && !(stdev->is_chre_enable)) {
-                err = setup_aec_package(stdev->odsp_hdl);
-                if (err != 0) {
-                    ALOGE("Failed to load AEC package");
-                    // We didn't load AEC package so don't setup the routes
-                    goto exit;
-                }
-
-                // Enable the bargein route if not enabled
-                err = enable_bargein_route(stdev->route_hdl, true);
-                if (err != 0) {
-                    ALOGE("Failed to enable buffer route");
-                    goto exit;
-                }
-            }
         } else if ((check_uuid_equality(model->uuid, stdev->ambient_model_uuid))
             || (check_uuid_equality(model->uuid, stdev->entity_model_uuid))) {
 
@@ -591,27 +574,6 @@ static int setup_buffer(struct knowles_sound_trigger_device *stdev,
             if (stdev->hotword_buffer_enable != 0)
                 goto exit;
 
-            err = tear_hotword_buffer_route(stdev->route_hdl,
-                                            stdev->is_bargein_route_enabled);
-            if (err != 0) {
-                ALOGE("Failed to disable hotword buffer route");
-                goto exit;
-            }
-
-            if ((stdev->is_bargein_route_enabled) && !(stdev->is_chre_enable)) {
-                err = enable_bargein_route(stdev->route_hdl, false);
-                if (err != 0) {
-                    ALOGE("Failed to enable buffer route");
-                    goto exit;
-                }
-
-                err = destroy_aec_package(stdev->odsp_hdl);
-                if (err != 0) {
-                    ALOGE("Failed to unload AEC package");
-                    goto exit;
-                }
-            }
-
             err = destroy_howord_buffer(stdev->odsp_hdl);
 
             if (err != 0) {
@@ -625,13 +587,6 @@ static int setup_buffer(struct knowles_sound_trigger_device *stdev,
             stdev->music_buffer_enable--;
             if (stdev->music_buffer_enable != 0)
                 goto exit;
-
-            err = tear_music_buffer_route(stdev->route_hdl,
-                                            stdev->is_bargein_route_enabled);
-            if (err != 0) {
-                ALOGE("Failed to disable music buffer route");
-                goto exit;
-            }
 
             err = destroy_music_buffer(stdev->odsp_hdl);
             if (err != 0) {
@@ -826,82 +781,57 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
      */
     if (enable) {
         if (stdev->is_mic_route_enabled == false) {
-            stdev->is_mic_route_enabled = true;
             err = enable_mic_route(stdev->route_hdl, true, ct);
             if (err != 0) {
                 ALOGE("Failed to enable mic route");
-                stdev->is_mic_route_enabled = false;
                 goto exit;
             }
+            stdev->is_mic_route_enabled = true;
         }
         if (stdev->is_music_playing == true &&
             stdev->is_bargein_route_enabled == false) {
 
+            err = setup_aec_package(stdev->odsp_hdl);
+            if (err != 0) {
+                ALOGE("Failed to load AEC package");
+                // We didn't load AEC package so don't setup the routes
+                goto exit;
+            }
+
+            // Enable the bargein route if not enabled
+            err = enable_bargein_route(stdev->route_hdl, true);
+            if (err != 0) {
+                ALOGE("Failed to enable buffer route");
+                goto exit;
+            }
             stdev->is_bargein_route_enabled = true;
-
-            if ((stdev->is_chre_enable)
-                || (stdev->hotword_buffer_enable)) {
-                err = setup_aec_package(stdev->odsp_hdl);
-                if (err != 0) {
-                    ALOGE("Failed to load AEC package");
-                    // We didn't load AEC package so don't setup the routes
-                    goto exit;
-                }
-
-                // Enable the bargein route if not enabled
-                err = enable_bargein_route(stdev->route_hdl, true);
-                if (err != 0) {
-                    ALOGE("Failed to enable buffer route");
-                    stdev->is_bargein_route_enabled = false;
-                    goto exit;
-                }
-
-                if (stdev->hotword_buffer_enable) {
-                     // Enable the bargein route if not enabled
-                     err = tear_hotword_buffer_route(stdev->route_hdl,
-                                         !stdev->is_bargein_route_enabled);
-                     if (err != 0) {
-                         ALOGE("Failed to tear old buffer route");
-                         goto exit;
-                     }
-
-                     err = set_hotword_buffer_route(stdev->route_hdl,
-                                         stdev->is_bargein_route_enabled);
-                     if (err != 0) {
-                         ALOGE("Failed to enable buffer route");
-                         stdev->is_bargein_route_enabled = false;
-                         goto exit;
-                     }
-                }
-            }
-
-            if (stdev->music_buffer_enable) {
-                err = tear_music_buffer_route(stdev->route_hdl,
-                                    !stdev->is_bargein_route_enabled);
-                if (err != 0) {
-                    ALOGE("Failed to tear old music buffer route");
-                    goto exit;
-                }
-                err = set_music_buffer_route(stdev->route_hdl,
-                                    stdev->is_bargein_route_enabled);
-                if (err != 0) {
-                    ALOGE("Failed to enable buffer route");
-                    goto exit;
-                }
-            }
         }
     } else {
         if (!is_any_model_active(stdev)) {
             ALOGD("None of keywords are active");
-
+            if (stdev->is_music_playing == true &&
+                stdev->is_bargein_route_enabled == true) {
+                // Just disable the route and update the route status but retain
+                // bargein status
+                err = enable_bargein_route(stdev->route_hdl, false);
+                if (err != 0) {
+                    ALOGE("Failed to disable bargein route");
+                    goto exit;
+                }
+                err = destroy_aec_package(stdev->odsp_hdl);
+                if (err != 0) {
+                    ALOGE("Failed to unload AEC package");
+                    goto exit;
+                }
+                stdev->is_bargein_route_enabled = false;
+           }
            if (stdev->is_mic_route_enabled == true) {
-               stdev->is_mic_route_enabled = false;
                err = enable_mic_route(stdev->route_hdl, false, ct);
                if (err != 0) {
                    ALOGE("Failed to disable mic route");
-                   stdev->is_mic_route_enabled = true;
                    goto exit;
                }
+               stdev->is_mic_route_enabled = false;
            }
        }
     }
@@ -926,7 +856,6 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
     stdev->current_enable = 0;
     stdev->hotword_buffer_enable = 0;
     stdev->music_buffer_enable = 0;
-    stdev->is_chre_enable = false;
 
     if (stdev->is_hmd_proc_on == true) {
         power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
@@ -958,61 +887,50 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
 
     if (stdev->is_music_playing == true &&
         stdev->is_bargein_route_enabled == true) {
-        if ((stdev->is_chre_enable)
-            || (stdev->hotword_buffer_enable)) {
-
-            err = setup_aec_package(stdev->odsp_hdl);
-            if (err != 0) {
-                ALOGE("Failed to restart AEC package");
-            }
-
-            err = enable_bargein_route(stdev->route_hdl, true);
-            if (err != 0) {
-                ALOGE("Failed to enable buffer route");
-                goto exit;
-            }
-
-            if (stdev->hotword_buffer_enable) {
-                 err = tear_hotword_buffer_route(stdev->route_hdl,
-                                     !stdev->is_bargein_route_enabled);
-                 if (err != 0) {
-                     ALOGE("Failed to tear old buffer route");
-                     goto exit;
-                 }
-
-                 err = set_hotword_buffer_route(stdev->route_hdl,
-                                     stdev->is_bargein_route_enabled);
-                 if (err != 0) {
-                     ALOGE("Failed to enable buffer route");
-                     goto exit;
-                 }
-            }
+        err = setup_aec_package(stdev->odsp_hdl);
+        if (err != 0) {
+            ALOGE("Failed to restart AEC package");
         }
 
-        if (stdev->music_buffer_enable) {
-            err = tear_music_buffer_route(stdev->route_hdl,
-                                !stdev->is_bargein_route_enabled);
-            if (err != 0) {
-                ALOGE("Failed to tear old music buffer route");
-                goto exit;
-            }
-            err = set_music_buffer_route(stdev->route_hdl,
-                                stdev->is_bargein_route_enabled);
-            if (err != 0) {
-                ALOGE("Failed to enable buffer route");
-                goto exit;
-            }
+        err = enable_bargein_route(stdev->route_hdl, false);
+        if (err != 0) {
+            ALOGE("Failed to tear bargein route");
         }
 
+        err = enable_bargein_route(stdev->route_hdl, true);
         if (err != 0) {
             ALOGE("Failed to restart bargein route");
         }
     }
 
-    // [TODO] Recovery function still TBD.
     // Download all the keyword models files that were previously loaded
     for (i = 0; i < MAX_MODELS; i++) {
         if (stdev->models[i].is_active == true) {
+            if (stdev->is_buffer_package_loaded == true) {
+                setup_buffer(stdev, &stdev->models[i], true);
+            }
+            if (check_uuid_equality(stdev->models[i].uuid, stdev->hotword_model_uuid) ||
+                (check_uuid_equality(stdev->models[i].uuid, stdev->wakeup_model_uuid))) {
+                if ((stdev->hotword_buffer_enable) &&
+                    (!(stdev->current_enable & HOTWORD_MASK) ||
+                      (stdev->current_enable & WAKEUP_MASK))) {
+                    tear_hotword_buffer_route(stdev->route_hdl,
+                                            stdev->is_bargein_route_enabled);
+                    set_hotword_buffer_route(stdev->route_hdl,
+                                            stdev->is_bargein_route_enabled);
+                }
+            }
+            if (check_uuid_equality(stdev->models[i].uuid, stdev->ambient_model_uuid) ||
+                (check_uuid_equality(stdev->models[i].uuid, stdev->entity_model_uuid))) {
+                if ((stdev->music_buffer_enable) &&
+                    (!(stdev->current_enable & AMBIENT_MASK) ||
+                      (stdev->current_enable & ENTITY_MASK))) {
+                    tear_music_buffer_route(stdev->route_hdl,
+                                        stdev->is_bargein_route_enabled);
+                    set_music_buffer_route(stdev->route_hdl,
+                                        stdev->is_bargein_route_enabled);
+                }
+            }
             setup_package(stdev, &stdev->models[i]);
             tear_package_route(stdev, stdev->models[i].uuid,
                             stdev->is_bargein_route_enabled);
@@ -1044,45 +962,6 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
                     goto exit;
                 }
             }
-        }
-    }
-
-    for (i = 0; i < MAX_MODELS; i++) {
-        if (stdev->models[i].is_active == true) {
-            if ((check_uuid_equality(stdev->models[i].uuid, stdev->hotword_model_uuid))
-               || (check_uuid_equality(stdev->models[i].uuid, stdev->wakeup_model_uuid))) {
-               // Setup the required buffer configuration
-                stdev->hotword_buffer_enable++;
-
-                if (stdev->hotword_buffer_enable > 1)
-                    continue;
-
-                err = setup_howord_buffer(stdev->odsp_hdl);
-                if (err != 0) {
-                    ALOGE("Failed to create the buffer plugin");
-                    goto exit;
-                }
-                tear_hotword_buffer_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
-                set_hotword_buffer_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
-            }
-
-            if ((check_uuid_equality(stdev->models[i].uuid, stdev->ambient_model_uuid))
-               || (check_uuid_equality(stdev->models[i].uuid, stdev->entity_model_uuid))) {
-               // Setup the required buffer configuration
-                stdev->music_buffer_enable++;
-
-                if (stdev->music_buffer_enable > 1)
-                    continue;
-
-                err = setup_music_buffer(stdev->odsp_hdl);
-                if (err != 0) {
-                    ALOGE("Failed to create the buffer plugin");
-                    goto exit;
-                }
-                tear_music_buffer_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
-                set_music_buffer_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
-            }
-
         }
     }
     ALOGD("%s: recovery done", __func__);
@@ -1387,15 +1266,30 @@ static int stop_recognition(struct knowles_sound_trigger_device *stdev,
 
     model->is_active = false;
 
-    tear_package_route(stdev, model->uuid, stdev->is_music_playing);
+    tear_package_route(stdev, model->uuid, stdev->is_bargein_route_enabled);
 
     destroy_package(stdev, model);
 
-    if (!(stdev->current_enable & PLUGIN1_MASK))
-        tear_hotword_buffer_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
 
-    if (!(stdev->current_enable & PLUGIN2_MASK))
-        tear_music_buffer_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
+    if (check_uuid_equality(model->uuid, stdev->hotword_model_uuid) ||
+        (check_uuid_equality(model->uuid, stdev->wakeup_model_uuid))) {
+        if ((stdev->hotword_buffer_enable) &&
+            !(stdev->current_enable & PLUGIN1_MASK)) {
+            tear_hotword_buffer_route(stdev->route_hdl,
+                                    stdev->is_bargein_route_enabled);
+        }
+    }
+
+    if (check_uuid_equality(model->uuid, stdev->ambient_model_uuid) ||
+        (check_uuid_equality(model->uuid, stdev->entity_model_uuid))) {
+        if ((stdev->music_buffer_enable) &&
+            !(stdev->current_enable & PLUGIN2_MASK)) {
+            tear_music_buffer_route(stdev->route_hdl,
+                                stdev->is_bargein_route_enabled);
+        }
+    }
+
+    setup_buffer(stdev, model, false);
 
     handle_input_source(stdev, false);
 
@@ -1488,15 +1382,6 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         stdev->is_buffer_package_loaded = true;
     }
 
-    // Setup and Configure the buffer plugin
-    if (stdev->is_buffer_package_loaded == true) {
-        ret = setup_buffer(stdev, &stdev->models[i], true);
-        if (ret != 0) {
-            ALOGE("%s: ERROR: Failed to setup buffer", __func__);
-            goto exit;
-        }
-    }
-
     // Send the keyword model to the chip only for hotword and ambient audio
     if (check_uuid_equality(stdev->models[i].uuid,
                             stdev->hotword_model_uuid)) {
@@ -1530,7 +1415,6 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
                                 stdev->chre_model_uuid)) {
         // setup the CHRE route and Mic route.
         stdev->models[i].is_active = true;
-        stdev->is_chre_enable = true;
         handle_input_source(stdev, true);
         setup_package(stdev, &stdev->models[i]);
         set_chre_audio_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
@@ -1614,22 +1498,6 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
         stdev->models[handle].is_active = false;
         tear_chre_audio_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
         destroy_package(stdev, &stdev->models[handle]);
-
-        if ((!stdev->hotword_buffer_enable) && (stdev->is_bargein_route_enabled)) {
-            ret = enable_bargein_route(stdev->route_hdl, false);
-            if (ret != 0) {
-                ALOGE("Failed to enable buffer route");
-                goto exit;
-            }
-
-            ret = destroy_aec_package(stdev->odsp_hdl);
-            if (ret != 0) {
-                ALOGE("Failed to unload AEC package");
-                goto exit;
-            }
-        }
-
-        stdev->is_chre_enable = false;
         handle_input_source(stdev, false);
     }
 
@@ -1641,8 +1509,6 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
         stdev->models[handle].data = NULL;
         stdev->models[handle].data_sz = 0;
     }
-
-    setup_buffer(stdev, &stdev->models[handle], false);
 
     if (!is_any_model_loaded(stdev) && stdev->is_buffer_package_loaded) {
         destroy_buffer_package(stdev->odsp_hdl);
@@ -1732,12 +1598,17 @@ static int stdev_start_recognition(
 
     handle_input_source(stdev, true);
 
+    if (stdev->is_buffer_package_loaded == true) {
+        setup_buffer(stdev, model, true);
+    }
+
     if (check_uuid_equality(model->uuid, stdev->hotword_model_uuid) ||
         (check_uuid_equality(model->uuid, stdev->wakeup_model_uuid))) {
         if ((stdev->hotword_buffer_enable) &&
             (!(stdev->current_enable & HOTWORD_MASK) ||
               (stdev->current_enable & WAKEUP_MASK))) {
-            set_hotword_buffer_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
+            set_hotword_buffer_route(stdev->route_hdl,
+                                    stdev->is_bargein_route_enabled);
         }
     }
 
@@ -1746,13 +1617,14 @@ static int stdev_start_recognition(
         if ((stdev->music_buffer_enable) &&
             (!(stdev->current_enable & AMBIENT_MASK) ||
               (stdev->current_enable & ENTITY_MASK))) {
-            set_music_buffer_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
+            set_music_buffer_route(stdev->route_hdl,
+                                stdev->is_bargein_route_enabled);
         }
     }
 
     setup_package(stdev, model);
 
-    set_package_route(stdev, model->uuid, stdev->is_music_playing);
+    set_package_route(stdev, model->uuid, stdev->is_bargein_route_enabled);
 
 exit:
     pthread_mutex_unlock(&stdev->lock);
@@ -2182,7 +2054,6 @@ static int stdev_open(const hw_module_t *module, const char *name,
 
     stdev->is_mic_route_enabled = false;
     stdev->is_music_playing = false;
-    stdev->is_chre_enable = false;
     stdev->is_bargein_route_enabled = false;
     stdev->is_buffer_package_loaded = false;
     stdev->hotword_buffer_enable = 0;
@@ -2293,14 +2164,17 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                                 stdev->is_bargein_route_enabled);
                 stdev->models[i].is_active = false;
                 destroy_package(stdev, &stdev->models[i]);
+                if (!(stdev->current_enable & PLUGIN1_MASK))
+                    tear_hotword_buffer_route(stdev->route_hdl,
+                                            stdev->is_bargein_route_enabled);
+
+                if (!(stdev->current_enable & PLUGIN2_MASK))
+                    tear_music_buffer_route(stdev->route_hdl,
+                                            stdev->is_bargein_route_enabled);
+
+                setup_buffer(stdev, &stdev->models[i], false);
             }
         }
-
-        if (!(stdev->current_enable & PLUGIN1_MASK))
-            tear_hotword_buffer_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
-
-        if (!(stdev->current_enable & PLUGIN2_MASK))
-            tear_music_buffer_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
 
         handle_input_source(stdev, false);
         break;
@@ -2340,31 +2214,17 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                     }
 
                     //Switch buffer input source
-                    if ((stdev->is_chre_enable) || (stdev->hotword_buffer_enable)) {
-                        if (stdev->hotword_buffer_enable) {
-                            ret = tear_hotword_buffer_route(stdev->route_hdl,
-                                                !stdev->is_bargein_route_enabled);
-                            if (ret != 0) {
-                                ALOGE("Failed to tear old buffer route");
-                                goto exit;
-                            }
-                            ret = set_hotword_buffer_route(stdev->route_hdl,
-                                                stdev->is_bargein_route_enabled);
-                            if (ret != 0) {
-                                ALOGE("Failed to enable buffer route");
-                                goto exit;
-                            }
-                        }
-
-                        ret = enable_bargein_route(stdev->route_hdl, false);
+                    if (stdev->hotword_buffer_enable) {
+                        ret = tear_hotword_buffer_route(stdev->route_hdl,
+                                            !stdev->is_bargein_route_enabled);
                         if (ret != 0) {
-                            ALOGE("Failed to enable buffer route");
+                            ALOGE("Failed to tear old buffer route");
                             goto exit;
                         }
-
-                        ret = destroy_aec_package(stdev->odsp_hdl);
+                        ret = set_hotword_buffer_route(stdev->route_hdl,
+                                            stdev->is_bargein_route_enabled);
                         if (ret != 0) {
-                            ALOGE("Failed to unload AEC package");
+                            ALOGE("Failed to enable buffer route");
                             goto exit;
                         }
                     }
@@ -2382,6 +2242,18 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                             ALOGE("Failed to enable buffer route");
                             goto exit;
                         }
+                    }
+
+                    ret = enable_bargein_route(stdev->route_hdl, false);
+                    if (ret != 0) {
+                        ALOGE("Failed to enable buffer route");
+                        goto exit;
+                    }
+
+                    ret = destroy_aec_package(stdev->odsp_hdl);
+                    if (ret != 0) {
+                        ALOGE("Failed to unload AEC package");
+                        goto exit;
                     }
 
                     ret = enable_mic_route(stdev->route_hdl, false,
@@ -2424,37 +2296,31 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                         ALOGE("Failed to enable mic route with EXT OSC");
                         goto exit;
                     }
+                    ret = setup_aec_package(stdev->odsp_hdl);
+                    if (ret != 0) {
+                        ALOGE("Failed to load AEC package");
+                        goto exit;
+                    }
 
+                    ret = enable_bargein_route(stdev->route_hdl, true);
+                    if (ret != 0) {
+                        ALOGE("Failed to enable buffer route");
+                        goto exit;
+                    }
                     stdev->is_bargein_route_enabled = true;
 
-                    //Switch buffer input source
-                    if ((stdev->is_chre_enable) || (stdev->hotword_buffer_enable)) {
-
-                        ret = setup_aec_package(stdev->odsp_hdl);
+                    if (stdev->hotword_buffer_enable) {
+                        ret = tear_hotword_buffer_route(stdev->route_hdl,
+                                            !stdev->is_bargein_route_enabled);
                         if (ret != 0) {
-                            ALOGE("Failed to load AEC package");
+                            ALOGE("Failed to tear old buffer route");
                             goto exit;
                         }
-
-                        ret = enable_bargein_route(stdev->route_hdl, true);
+                        ret = set_hotword_buffer_route(stdev->route_hdl,
+                                            stdev->is_bargein_route_enabled);
                         if (ret != 0) {
                             ALOGE("Failed to enable buffer route");
                             goto exit;
-                        }
-
-                        if (stdev->hotword_buffer_enable) {
-                            ret = tear_hotword_buffer_route(stdev->route_hdl,
-                                                !stdev->is_bargein_route_enabled);
-                            if (ret != 0) {
-                                ALOGE("Failed to tear old buffer route");
-                                goto exit;
-                            }
-                            ret = set_hotword_buffer_route(stdev->route_hdl,
-                                                stdev->is_bargein_route_enabled);
-                            if (ret != 0) {
-                                ALOGE("Failed to enable buffer route");
-                                goto exit;
-                            }
                         }
                     }
 
