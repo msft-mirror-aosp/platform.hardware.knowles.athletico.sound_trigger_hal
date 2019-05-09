@@ -24,6 +24,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <cutils/properties.h>
 
 #define LOG_TAG "ia_crash_event_logger"
 #include <cutils/log.h>
@@ -39,6 +40,11 @@
 #define TXT_EXTN                ".txt"
 #define MAX_FILENAME_LEN        512
 #define MAX_TIMESTR_LEN         64
+
+#define SSR_RAMDUMP_PREFIX      "ramdump_audio_codec_"
+#define SSR_CRASH_FILE_PREFIX   "ia_crash_dump_"
+#define SSR_REG_FILE_PREFIX     "ia_reg_access_history_"
+#define SSR_DUMP_PATH           "/data/vendor/ssrdump/"
 
 int g_exit_socket[2];
 
@@ -56,6 +62,15 @@ char *crash_dump_split_file_names[] =
     "/data/data/dump_crash_HMD_",
     "/data/data/dump_crash_DMX_"
     };
+
+char *ssr_crash_dump_split_file_names[] = {
+    "ia_dump_debug_CM4_",
+    "ia_dump_debug_HMD_",
+    "ia_dump_debug_DMX_",
+    "ia_dump_crash_CM4_",
+    "ia_dump_crash_HMD_",
+    "ia_dump_crash_DMX_",
+};
 
 int split_bin(unsigned char *buf, int len, const char* time_stamp)
 {
@@ -262,12 +277,194 @@ exit:
     }
 }
 
+/* --- functions for SSR detector ---*/
+int ssr_split_bin(unsigned char *buf, int len, const char* time_stamp) {
+    unsigned int header = 0, size = 0, tot_len = 0, flen = 0;
+    unsigned char *ptr = NULL;
+    char file_name[MAX_FILENAME_LEN];
+    FILE *fp = NULL;
+    int fcount = 0;
+    int no_crashdump_files = sizeof(ssr_crash_dump_split_file_names) /
+            sizeof(ssr_crash_dump_split_file_names[0]);
+
+    while ((tot_len < len) && (fcount++ < no_crashdump_files)) {
+        header = buf[tot_len];
+
+        size = buf[tot_len + 8] |
+                buf[tot_len + 9]  << 8  |
+                buf[tot_len + 10] << 16 |
+                buf[tot_len + 11] << 24 ;
+
+        tot_len += 12;
+
+        snprintf(file_name, MAX_FILENAME_LEN, "%s%s%s%s%s",
+                SSR_DUMP_PATH, SSR_RAMDUMP_PREFIX,
+                ssr_crash_dump_split_file_names[header & 0xf],
+                time_stamp, BIN_EXTN);
+
+        fp = fopen(file_name, "w+");
+
+        ptr = buf + tot_len;
+        flen = fwrite(ptr, 1, size, fp);
+        tot_len += size;
+        fclose(fp);
+        ALOGI("SSR Crash logs saved to %s", file_name);
+    }
+    return 0;
+}
+
+int ssr_split_crash_dump_file(const char* crash_dump_filename,
+                               const char* time_stamp) {
+    int fd = -1, fil_len = 0;
+    FILE *fp = NULL;
+    struct stat st;
+    unsigned char *buf = NULL;
+    int len = 0, ret = 0;
+
+    fp = fopen(crash_dump_filename, "r");
+    if (!fp) {
+        ALOGE("File open error %s \n", crash_dump_filename);
+        return -1;
+    }
+
+    fd = fileno(fp);
+    fstat(fd, &st);
+    fil_len = st.st_size;
+    buf = (unsigned char *)malloc(fil_len);
+
+    if (NULL == buf) {
+        ALOGE("Failed to allocate buffer exiting");
+        ret = -1;
+        goto exit;
+    }
+
+    len = fread(buf, 1, fil_len, fp);
+    if (len <= 0) {
+        ALOGE("file reading error %s\n", crash_dump_filename);
+        ret = -1;
+        goto exit;
+    }
+    ret = ssr_split_bin(buf, len, time_stamp);
+
+exit:
+    if (fp) {
+        fclose(fp);
+    }
+
+    if (buf) {
+        free(buf);
+    }
+    return ret;
+}
+
+void ssr_copy_log(const char* src_path, const char* dis_path) {
+    int src_fp = -1, dis_fp = -1;
+    int bytes_read = 0;
+    void *temp_buf = NULL;
+
+    // allocate temp buf
+    temp_buf = malloc(BUF_SIZE);
+    if (!temp_buf) {
+        ALOGE("Failed to allocate buffer exiting");
+        goto exit;
+    }
+
+    // open src file
+    src_fp = open(src_path, O_RDONLY);
+    if (src_fp == -1) {
+        ALOGE("Failed to open %s with error %d(%s)",
+                src_path, errno, strerror(errno));
+        goto exit;
+    }
+
+    // open dis file and append
+    dis_fp = open(dis_path, O_CREAT | O_SYNC | O_WRONLY,
+                  S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    if (dis_fp == -1) {
+        ALOGE("Failed to open %s with error %d(%s)",
+                dis_path, errno, strerror(errno));
+        goto exit;
+    }
+
+    // copy data
+    do {
+        bytes_read = read(src_fp, temp_buf, BUF_SIZE);
+        if (bytes_read > 0)
+            write(dis_fp, temp_buf, bytes_read);
+    } while (bytes_read > 0);
+
+    ALOGI("Write data successfully from %s to %s", src_path, dis_path);
+
+exit:
+    if (src_fp != -1) {
+        close(src_fp);
+    }
+
+    if (dis_fp != -1) {
+        close(dis_fp);
+    }
+
+    if (temp_buf) {
+        free(temp_buf);
+    }
+    return;
+}
+
+void ssr_dump_log() {
+    time_t t;
+    struct tm *tm;
+    char curr_time_for_property[MAX_TIMESTR_LEN];
+    char curr_time_for_dump[MAX_TIMESTR_LEN];
+    char out_crash_file_name[MAX_FILENAME_LEN];
+    char out_reg_file_name[MAX_FILENAME_LEN];
+
+    // get current time
+    t = time(NULL);
+    tm = localtime(&t);
+    snprintf(curr_time_for_property, MAX_TIMESTR_LEN,
+            "%.4d-%.2d-%.2d %.2d-%.2d-%.2d",
+            tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+            tm->tm_hour, tm->tm_min, tm->tm_sec);
+    snprintf(curr_time_for_dump, MAX_TIMESTR_LEN,
+            "%.02d-%.02d-%.02d_%.02d-%.02d-%.02d",
+            tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+            tm->tm_hour, tm->tm_min, tm->tm_sec);
+    // strftime(curr_time_for_dump, MAX_TIMESTR_LEN, "%F_%H_%M_%S", tm);
+
+    // set property
+    property_set("vendor.debug.ssrdump.subsys", "audio_codec");
+    property_set("vendor.debug.ssrdump.timestamp", curr_time_for_property);
+
+    // copy crash log only
+    snprintf(out_crash_file_name, MAX_FILENAME_LEN, "%s%s%s%s%s",
+            SSR_DUMP_PATH, SSR_RAMDUMP_PREFIX, SSR_CRASH_FILE_PREFIX,
+            curr_time_for_dump, BIN_EXTN);
+    ssr_copy_log(CRASH_LOGGER_DEV, out_crash_file_name);
+    ssr_split_crash_dump_file(out_crash_file_name, curr_time_for_dump);
+    ALOGI("Crash logs has been dumped to %s", out_crash_file_name);
+
+    // copy reg
+    snprintf(out_reg_file_name, MAX_FILENAME_LEN, "%s%s%s%s%s",
+            SSR_DUMP_PATH, SSR_RAMDUMP_PREFIX, SSR_REG_FILE_PREFIX,
+            curr_time_for_dump, TXT_EXTN);
+    ssr_copy_log(REGDUMP_LOGGER_DEV, out_reg_file_name);
+    ALOGI("Register access history has been dumped %s", out_reg_file_name);
+}
+
+/* --- main function --- */
 int main(int argc, char** argv) {
     int err = 0;
     int timeout = -1; // Wait for event indefinitely
     struct pollfd fds[2];
     char msg[UEVENT_MSG_LEN];
     int i, n;
+    bool ssr_monitor = false;
+
+    if ((argc == 2) && !strcmp(argv[1], "-m")) {
+        ALOGD("Monitor the crash logs");
+        (void)umask(S_IWGRP | S_IWOTH);
+        ssr_monitor = true;
+    }
 
     signal(SIGINT, sigint_handler);
 
@@ -307,8 +504,12 @@ int main(int argc, char** argv) {
             for (i = 0; i < n;) {
                 if (strstr(msg + i, "IAXXX_CRASH_EVENT")) {
                     ALOGD("IAXXX_CRASH_EVENT received trying to get the crash logs");
-                    dump_reg_access_hist_log();
-                    dump_crash_log();
+                    if (ssr_monitor) {
+                        ssr_dump_log();
+                    } else {
+                        dump_reg_access_hist_log();
+                        dump_crash_log();
+                    }
                 }
 
                 i += strlen(msg + i) + 1;
