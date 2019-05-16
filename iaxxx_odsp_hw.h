@@ -620,6 +620,29 @@ int iaxxx_odsp_get_sys_versions(struct iaxxx_odsp_hw *odsp_hw_hdl,
 int iaxxx_odsp_get_device_id(struct iaxxx_odsp_hw *odsp_hw_hdl,
                             uint32_t *device_id);
 
+/**
+ * Returns Firmware status
+ *
+ * Input  - odsp_hw_hdl     - Handle to odsp hw structure
+ *          mode            - Returned firmware status
+ *              0: Firmware has crashed
+ *              1: Firmware is idle
+ *              2: Firmware is active
+ *
+ * Output - 0 on success, on failure < 0
+ */
+int iaxxx_odsp_get_fw_status(struct iaxxx_odsp_hw *odsp_hw_hdl,
+                                       uint32_t *status);
+
+/**
+ * Resets the firmware by redownloading the firmware
+ *
+ * Input  - odsp_hw_hdl     - Handle to odsp hw structure
+ *
+ * Output - 0 on success, on failure < 0
+ */
+int iaxxx_odsp_reset_fw(struct iaxxx_odsp_hw *odsp_hw_hdl);
+
 #if __cplusplus
 } // extern "C"
 #endif
