@@ -201,4 +201,6 @@ int power_on_proc_mem(struct audio_route *route_hdl, int enable, int core);
 int power_off_proc_mem(struct audio_route *route_hdl, int enable, int core);
 int power_off_proc_mem_in_retn(struct audio_route *route_hdl, int enable, int core);
 int power_on_proc_mem_out_off_retn(struct audio_route *route_hdl, int enable, int core);
+int get_fw_status(struct iaxxx_odsp_hw *odsp_hdl, unsigned int *status);
+int reset_fw(struct iaxxx_odsp_hw *odsp_hdl);
 #endif /* _CVQ_IOCTL_H */
