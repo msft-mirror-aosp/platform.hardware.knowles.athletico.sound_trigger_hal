@@ -1721,3 +1721,68 @@ func_exit:
     FUNCTION_EXIT_LOG;
     return err;
 }
+
+/**
+ * Returns Firmware status
+ *
+ * Input  - odsp_hw_hdl     - Handle to odsp hw structure
+ *          mode            - Returned firmware status
+ *              0: Firmware has crashed
+ *              1: Firmware is idle
+ *              2: Firmware is active
+ *
+ * Output - 0 on success, on failure < 0
+ */
+int iaxxx_odsp_get_fw_status(struct iaxxx_odsp_hw *odsp_hw_hdl,
+                                       uint32_t *status)
+{
+    int err = 0;
+
+    FUNCTION_ENTRY_LOG;
+
+    if (NULL == odsp_hw_hdl) {
+        ALOGE("%s: ERROR: Invalid handle to iaxxx_odsp_hw", __func__);
+        err = -1;
+        goto func_exit;
+    }
+
+    err = ioctl(fileno(odsp_hw_hdl->dev_node),
+                    ODSP_GET_FW_STATUS, (unsigned long)status);
+    if (err < 0) {
+        ALOGE("%s: ERROR: Failed with error %s", __func__, strerror(errno));
+    }
+
+func_exit:
+    FUNCTION_EXIT_LOG;
+    return err;
+}
+
+/**
+ * Resets the firmware by redownloading the firmware
+ *
+ * Input  - odsp_hw_hdl     - Handle to odsp hw structure
+ *
+ * Output - 0 on success, on failure < 0
+ */
+int iaxxx_odsp_reset_fw(struct iaxxx_odsp_hw *odsp_hw_hdl)
+{
+    int err = 0;
+
+    FUNCTION_ENTRY_LOG;
+
+    if (NULL == odsp_hw_hdl) {
+        ALOGE("%s: ERROR: Invalid handle to iaxxx_odsp_hw", __func__);
+        err = -1;
+        goto func_exit;
+    }
+
+    err = ioctl(fileno(odsp_hw_hdl->dev_node), ODSP_RESET_FW);
+    if (err < 0) {
+        ALOGE("%s: ERROR: Failed with error %s", __func__, strerror(errno));
+    }
+
+func_exit:
+    FUNCTION_EXIT_LOG;
+    return err;
+}
+
