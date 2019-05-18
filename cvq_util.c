@@ -1601,3 +1601,42 @@ int power_on_proc_mem_out_off_retn(struct audio_route *route_hdl, int enable, in
     ALOGD("-Exiting %s-", __func__);
     return 0;
 }
+
+int get_fw_status(struct iaxxx_odsp_hw *odsp_hdl, unsigned int *status)
+{
+    int err;
+
+    ALOGD("+%s+", __func__);
+
+    err = iaxxx_odsp_get_fw_status(odsp_hdl,
+                                   status);
+    if (err == -1) {
+        ALOGE("%s: ERROR: Failed to get fw status with error %d(%s)",
+                __func__, errno, strerror(errno));
+        goto exit;
+    }
+
+    ALOGE("Firmware status is %d", *status);
+
+exit:
+    ALOGD("-%s-", __func__);
+    return err;
+}
+
+int reset_fw(struct iaxxx_odsp_hw *odsp_hdl)
+{
+    int err;
+
+    ALOGD("+%s+", __func__);
+    err = iaxxx_odsp_reset_fw(odsp_hdl);
+    if (err == -1) {
+        ALOGE("%s: ERROR: Failed to reset fw with error %d(%s)",
+                __func__, errno, strerror(errno));
+        goto exit;
+    }
+
+exit:
+    ALOGD("-%s-", __func__);
+    return err;
+
+}

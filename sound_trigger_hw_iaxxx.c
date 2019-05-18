@@ -151,6 +151,8 @@ struct knowles_sound_trigger_device {
     bool is_dmx_proc_on;
     int hotword_buffer_enable;
     int music_buffer_enable;
+    bool is_chre_enable;
+    bool is_media_recording;
 
     unsigned int current_enable;
 
@@ -161,6 +163,10 @@ struct knowles_sound_trigger_device {
     void *audio_hal_handle;
     audio_hw_call_back_t audio_hal_cb;
     unsigned int sthal_prop_api_version;
+
+    int snd_crd_num;
+    char mixer_path_xml[NAME_MAX_SIZE];
+    bool fw_reset_done_by_hal;
 };
 
 /*
@@ -970,7 +976,7 @@ exit:
 }
 
 // stdev needs to be locked before calling this function
-static int fw_crash_recovery(struct knowles_sound_trigger_device *stdev)
+static int crash_recovery(struct knowles_sound_trigger_device *stdev)
 {
     int err = 0;
 
@@ -1002,7 +1008,8 @@ static void *callback_thread_loop(void *context)
     int kwid = 0;
     struct iaxxx_get_event_info ge;
     void *payload = NULL;
-    unsigned int payload_size = 0;
+    unsigned int payload_size = 0, fw_status = IAXXX_FW_IDLE;
+    int fw_status_retries = 0;
 
     ALOGI("%s", __func__);
     prctl(PR_SET_NAME, (unsigned long)"sound trigger callback", 0, 0, 0);
@@ -1032,7 +1039,48 @@ static void *callback_thread_loop(void *context)
 
     ge.event_id = -1;
 
-    power_down_all_non_ctrl_proc_mem(stdev->mixer);
+    // Try to get the firmware status, if we fail, try for 10 times with a gap
+    // of 500ms, if we are unable to get the status after that then exit
+    do {
+        err = get_fw_status(stdev->odsp_hdl, &fw_status);
+        if (err == -1) {
+            ALOGE("%s: ERROR: Failed to get the firmware status %d(%s)",
+                    __func__, errno, strerror(errno));
+            usleep(RETRY_US);
+            fw_status_retries++;
+        }
+    } while (err != 0 && fw_status_retries < RETRY_NUMBER);
+
+    if (err != 0) {
+        ALOGE("%s: ERROR: Failed to get firmware status after %d tries",
+                __func__, RETRY_NUMBER);
+        goto exit;
+    }
+
+    if (fw_status == IAXXX_FW_ACTIVE) {
+        stdev->is_st_hal_ready = false;
+        // reset the firmware and wait for firmware download complete
+        err = reset_fw(stdev->odsp_hdl);
+        if (err == -1) {
+            ALOGE("%s: ERROR: Failed to reset the firmware %d(%s)",
+                    __func__, errno, strerror(errno));
+        }
+        stdev->fw_reset_done_by_hal = true;
+    } else if (fw_status == IAXXX_FW_CRASH) {
+        // Firmware has crashed wait till it recovers
+        stdev->is_st_hal_ready = false;
+    } else if (fw_status == IAXXX_FW_IDLE) {
+        stdev->route_hdl = audio_route_init(stdev->snd_crd_num,
+                                            stdev->mixer_path_xml);
+        if (stdev->route_hdl == NULL) {
+            ALOGE("Failed to init the audio_route library");
+            goto exit;
+        }
+
+        power_down_all_non_ctrl_proc_mem(stdev->mixer);
+
+        stdev->is_st_hal_ready = true;
+    }
     pthread_mutex_unlock(&stdev->lock);
 
     while (1) {
@@ -1084,13 +1132,32 @@ static void *callback_thread_loop(void *context)
                         ALOGE("get_event failed with error %d", err);
                     }
                 } else if (strstr(msg + i, IAXXX_RECOVERY_EVENT_STR)) {
+                    /* If the ST HAL did the firmware reset then that means
+                     * that the userspace crashed so we need to reinit the audio
+                     * route library, if we didn't reset the firmware, then it
+                     * was genuine firmware crash and we don't need to reinit
+                     * the audio route library.
+                     */
+                    if (stdev->fw_reset_done_by_hal == true) {
+                        stdev->route_hdl = audio_route_init(stdev->snd_crd_num,
+                                                            stdev->mixer_path_xml);
+                        if (stdev->route_hdl == NULL) {
+                            ALOGE("Failed to init the audio_route library");
+                            goto exit;
+                        }
+
+                        stdev->fw_reset_done_by_hal = false;
+                    }
+
                     ALOGD("Firmware has redownloaded, start the recovery");
-                    int err = fw_crash_recovery(stdev);
+                    int err = crash_recovery(stdev);
                     if (err != 0) {
-                        ALOGE("Firmware crash recovery failed");
+                        ALOGE("Crash recovery failed");
                     }
                 } else if (strstr(msg + i, IAXXX_FW_DWNLD_SUCCESS_STR)) {
                     ALOGD("Firmware downloaded successfully");
+                    stdev->is_st_hal_ready = true;
+                    power_down_all_non_ctrl_proc_mem(stdev->mixer);
                 } else if (strstr(msg + i, IAXXX_FW_CRASH_EVENT_STR)) {
                     ALOGD("Firmware has crashed");
                     // Don't allow any op on ST HAL until recovery is complete
@@ -1413,12 +1480,20 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         stdev->models[i].kw_id = USELESS_KW_ID;
     } else if (check_uuid_equality(stdev->models[i].uuid,
                                 stdev->chre_model_uuid)) {
-        // setup the CHRE route and Mic route.
-        stdev->models[i].is_active = true;
-        handle_input_source(stdev, true);
-        setup_package(stdev, &stdev->models[i]);
-        set_chre_audio_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
+        if (hw_properties.concurrent_capture == false &&
+            stdev->is_media_recording == true) {
+            ALOGW("%s: device is recording, can't enable chre now", __func__);
+        } else {
+            if (stdev->models[i].is_active == false) {
+                stdev->models[i].is_active = true;
+                handle_input_source(stdev, true);
+                setup_package(stdev, &stdev->models[i]);
+                set_package_route(stdev, stdev->models[i].uuid,
+                                stdev->is_bargein_route_enabled);
+            }
+        }
         stdev->models[i].kw_id = USELESS_KW_ID;
+        stdev->is_chre_enable = true;
     } else {
         ALOGE("%s: ERROR: unknown keyword model file", __func__);
         ret = -EINVAL;
@@ -1494,11 +1569,14 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
         stdev->current_enable = stdev->current_enable & ~OSLO_MASK;
     } else if (check_uuid_equality(stdev->models[handle].uuid,
                                 stdev->chre_model_uuid)) {
-        // Disable the CHRE route
-        stdev->models[handle].is_active = false;
-        tear_chre_audio_route(stdev->route_hdl, stdev->is_bargein_route_enabled);
-        destroy_package(stdev, &stdev->models[handle]);
-        handle_input_source(stdev, false);
+        if (stdev->models[handle].is_active == true) {
+            stdev->models[handle].is_active = false;
+            tear_package_route(stdev, stdev->models[handle].uuid,
+                            stdev->is_bargein_route_enabled);
+            destroy_package(stdev, &stdev->models[handle]);
+            handle_input_source(stdev, false);
+        }
+        stdev->is_chre_enable = false;
     }
 
     stdev->models[handle].sound_model_callback = NULL;
@@ -1991,7 +2069,6 @@ static int stdev_open(const hw_module_t *module, const char *name,
     struct knowles_sound_trigger_device *stdev;
     int ret = 0, i = 0;
     int snd_card_num = 0;
-    char mixer_path_xml[NAME_MAX_SIZE];
 
     ALOGE("!! Knowles SoundTrigger v1!!");
 
@@ -2061,6 +2138,11 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->current_enable = 0;
     stdev->is_hmd_proc_on = false;
     stdev->is_dmx_proc_on = false;
+    stdev->is_chre_enable = false;
+    stdev->is_media_recording = false;
+
+    stdev->snd_crd_num = snd_card_num;
+    stdev->fw_reset_done_by_hal = false;
 
     str_to_uuid(HOTWORD_AUDIO_MODEL, &stdev->hotword_model_uuid);
     str_to_uuid(WAKEUP_MODEL, &stdev->wakeup_model_uuid);
@@ -2075,16 +2157,9 @@ static int stdev_open(const hw_module_t *module, const char *name,
         ret = -EIO;
         goto error;
     }
-    stdev->mixer = find_stdev_mixer_path(snd_card_num, mixer_path_xml);
+    stdev->mixer = find_stdev_mixer_path(stdev->snd_crd_num, stdev->mixer_path_xml);
     if (stdev->mixer == NULL) {
         ALOGE("Failed to init the mixer");
-        ret = -EAGAIN;
-        goto error;
-    }
-
-    stdev->route_hdl = audio_route_init(snd_card_num, mixer_path_xml);
-    if (stdev->route_hdl == NULL) {
-        ALOGE("Failed to init the audio_route library");
         ret = -EAGAIN;
         goto error;
     }
@@ -2093,8 +2168,6 @@ static int stdev_open(const hw_module_t *module, const char *name,
     // Create a thread to handle all events from kernel
     pthread_create(&stdev->callback_thread, (const pthread_attr_t *) NULL,
                 callback_thread_loop, stdev);
-
-    stdev->is_st_hal_ready = true;
 
     *device = &stdev->device.common; /* same address as stdev */
 exit:
@@ -2142,6 +2215,21 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
 
     switch (event) {
     case AUDIO_EVENT_CAPTURE_DEVICE_INACTIVE:
+        if (stdev->is_chre_enable == true) {
+            for (i = 0; i < MAX_MODELS; i++) {
+                if (check_uuid_equality(stdev->models[i].uuid,
+                                        stdev->chre_model_uuid)) {
+                    if (stdev->models[i].is_active == false) {
+                        stdev->models[i].is_active = true;
+                        handle_input_source(stdev, true);
+                        setup_package(stdev, &stdev->models[i]);
+                        set_package_route(stdev, stdev->models[i].uuid,
+                                        stdev->is_bargein_route_enabled);
+                    }
+                }
+            }
+        }
+        stdev->is_media_recording = false;
     case AUDIO_EVENT_CAPTURE_STREAM_INACTIVE:
         /*
          * [TODO] handle capture device on/off event
@@ -2151,6 +2239,7 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         ALOGD("%s: handle capture inactive event %d", __func__, event);
         break;
     case AUDIO_EVENT_CAPTURE_DEVICE_ACTIVE:
+        stdev->is_media_recording = true;
     case AUDIO_EVENT_CAPTURE_STREAM_ACTIVE:
         /*
          * Handle capture active event
@@ -2164,11 +2253,13 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                                 stdev->is_bargein_route_enabled);
                 stdev->models[i].is_active = false;
                 destroy_package(stdev, &stdev->models[i]);
-                if (!(stdev->current_enable & PLUGIN1_MASK))
+                if ((stdev->hotword_buffer_enable) &&
+                    !(stdev->current_enable & PLUGIN1_MASK))
                     tear_hotword_buffer_route(stdev->route_hdl,
                                             stdev->is_bargein_route_enabled);
 
-                if (!(stdev->current_enable & PLUGIN2_MASK))
+                if ((stdev->music_buffer_enable) &&
+                    !(stdev->current_enable & PLUGIN2_MASK))
                     tear_music_buffer_route(stdev->route_hdl,
                                             stdev->is_bargein_route_enabled);
 
