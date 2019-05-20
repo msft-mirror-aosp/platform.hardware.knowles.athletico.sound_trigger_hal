@@ -122,6 +122,12 @@ struct sound_trigger_event_info {
     struct sound_trigger_session_info st_ses;
 };
 
+struct sound_trigger_get_param_data {
+    char *param;
+    int sm_handle;
+    struct str_parms *reply;
+};
+
 struct sound_trigger_device_info {
     int device;
 };
@@ -134,7 +140,10 @@ struct audio_event_info {
         struct audio_read_samples_info aud_info;
         char str_value[ST_EVENT_CONFIG_MAX_STR_VALUE];
         struct audio_hal_usecase usecase;
+        bool audio_ec_ref_enabled;
+        struct sound_trigger_get_param_data st_get_param_data;
     } u;
+    struct sound_trigger_device_info device_info;
 };
 
 /* STHAL callback which is called by AHAL */
