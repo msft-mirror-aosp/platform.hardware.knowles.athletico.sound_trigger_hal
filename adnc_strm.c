@@ -367,8 +367,6 @@ read_again:
          */
         if (adnc_strm_dev->pcm_avail_size == 0 ||
             adnc_strm_dev->pcm_avail_size < bytes) {
-            ALOGD("Calling read_again pcm_avail_size %zu pcm_read_offset %zu",
-                    adnc_strm_dev->pcm_avail_size, adnc_strm_dev->pcm_read_offset);
             goto read_again;
         }
     }

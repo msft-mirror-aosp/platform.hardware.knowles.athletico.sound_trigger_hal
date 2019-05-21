@@ -133,7 +133,6 @@ int ia_read_tunnel_data(struct ia_tunneling_hal *thdl,
                         void *buf,
                         int buf_sz)
 {
-    FUNCTION_ENTRY_LOG;
     int read_bytes;
 
     if ((buf == NULL) || (buf_sz <= 0)) {
