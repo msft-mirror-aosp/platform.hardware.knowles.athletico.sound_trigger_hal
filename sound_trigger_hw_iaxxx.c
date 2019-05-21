@@ -2367,6 +2367,11 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         break;
     case AUDIO_EVENT_PLAYBACK_STREAM_ACTIVE:
         ALOGD("%s: handle playback stream active", __func__);
+        if (!(config->device_info.device & AUDIO_DEVICE_OUT_SPEAKER)) {
+            ALOGD("%s: Playback device doesn't include SPEAKER.",
+                __func__);
+            goto exit;
+        }
         if (stdev->is_music_playing != true) {
             stdev->is_music_playing = true;
             if (stdev->is_mic_route_enabled != false) {
