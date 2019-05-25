@@ -980,6 +980,7 @@ static int crash_recovery(struct knowles_sound_trigger_device *stdev)
 {
     int err = 0;
 
+    set_default_apll_clk(stdev->mixer);
     power_down_all_non_ctrl_proc_mem(stdev->mixer);
     // Redownload the keyword model files and start recognition
     err = restart_recognition(stdev);
@@ -1077,6 +1078,7 @@ static void *callback_thread_loop(void *context)
             goto exit;
         }
 
+        set_default_apll_clk(stdev->mixer);
         power_down_all_non_ctrl_proc_mem(stdev->mixer);
 
         stdev->is_st_hal_ready = true;
@@ -1157,6 +1159,7 @@ static void *callback_thread_loop(void *context)
                 } else if (strstr(msg + i, IAXXX_FW_DWNLD_SUCCESS_STR)) {
                     ALOGD("Firmware downloaded successfully");
                     stdev->is_st_hal_ready = true;
+                    set_default_apll_clk(stdev->mixer);
                     power_down_all_non_ctrl_proc_mem(stdev->mixer);
                 } else if (strstr(msg + i, IAXXX_FW_CRASH_EVENT_STR)) {
                     ALOGD("Firmware has crashed");
