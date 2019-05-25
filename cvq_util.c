@@ -1459,6 +1459,32 @@ int get_wakeup_param_blk(struct iaxxx_odsp_hw *odsp_hdl, void *payload,
     return err;
 }
 
+int set_default_apll_clk(struct mixer *mixer) {
+
+    int ret = 0;
+    struct mixer_ctl* ctl;
+
+    ALOGD("+Entering %s+", __func__);
+
+    if (!mixer) {
+        ALOGE("%s mixer is NULL", __func__);
+        return -EINVAL;
+    }
+
+    ctl = mixer_get_ctl_by_name(mixer, "Port ApllCLK");
+    if (ctl) {
+       ret = mixer_ctl_set_enum_by_string(ctl, "IAXXX_ACLK_FREQ_24576");
+       if (ret)
+          ALOGE("%s: update ApllCLK fail! ret = %d", __func__, ret);
+    } else {
+          ALOGE("%s: get Port ApllCL control fail", __func__);
+          ret = -ENODEV;
+    }
+
+    ALOGD("-Exiting %s-", __func__);
+    return ret;
+}
+
 int power_down_all_non_ctrl_proc_mem(struct mixer *mixer)
 {
     int ret = 0;
