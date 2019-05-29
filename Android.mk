@@ -151,6 +151,18 @@ LOCAL_PROPRIETARY_MODULE := true
 include $(BUILD_EXECUTABLE)
 
 include $(CLEAR_VARS)
+LOCAL_PRELINK_MODULE := false
+LOCAL_MODULE := oslo_get_stats
+LOCAL_SRC_FILES := tests/oslo_get_stats.c
+LOCAL_HEADER_LIBRARIES := libhardware_headers
+LOCAL_SHARED_LIBRARIES := liblog \
+			libutils \
+			libcutils \
+			libosloutils
+LOCAL_PROPRIETARY_MODULE := true
+include $(BUILD_EXECUTABLE)
+
+include $(CLEAR_VARS)
 
 LOCAL_PRELINK_MODULE := false
 LOCAL_MODULE := spi_reliability_test
