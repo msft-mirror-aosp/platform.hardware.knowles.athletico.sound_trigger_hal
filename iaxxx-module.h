@@ -54,7 +54,22 @@ struct iaxxx_pwr_stats {
   uint64_t mpllTimeStamp[NUM_MPLL_CLK_FREQ];
   uint64_t sleepModeTimeStamp;
   uint64_t sleepModeCumulativeDur;
-} __attribute__((__packed__));
+};
+
+enum {
+  SENSOR_MODE_OFF,
+  SENSOR_MODE_ENTRANCE,
+  SENSOR_MODE_INTERACTIVE,
+  SENSOR_NUM_MODE,
+};
+
+struct  iaxxx_sensor_mode_stats {
+  uint64_t    totalNumEntries;
+  uint64_t    totalTimeSpentMs;
+  uint64_t    lastEntryTimeStampMs;
+  uint64_t    lastExitTimeStampMs;
+};
+
 struct iaxxx_sensor_info {
   uint32_t block_id;
   uint32_t inst_id;
@@ -79,7 +94,10 @@ struct iaxxx_script_info {
 struct iaxxx_osc_trim_period {
   int period;
 };
+/* IOCTL Magic character */
 #define IAXXX_IOCTL_MAGIC 'I'
+
+/* Create IOCTL */
 #define MODULE_SENSOR_ENABLE _IO(IAXXX_IOCTL_MAGIC, 0x51)
 #define MODULE_SENSOR_DISABLE _IO(IAXXX_IOCTL_MAGIC, 0x52)
 #define MODULE_SENSOR_SET_PARAM _IO(IAXXX_IOCTL_MAGIC, 0x53)
@@ -90,4 +108,5 @@ struct iaxxx_osc_trim_period {
 #define SCRIPT_TRIGGER _IO(IAXXX_IOCTL_MAGIC, 0x63)
 #define IAXXX_POWER_STATS_COUNT _IO(IAXXX_IOCTL_MAGIC, 0x71)
 #define IAXXX_SET_OSC_TRIM_PERIOD _IO(IAXXX_IOCTL_MAGIC, 0x72)
+#define IAXXX_SENSOR_MODE_STATS _IO(IAXXX_IOCTL_MAGIC, 0x73)
 #endif

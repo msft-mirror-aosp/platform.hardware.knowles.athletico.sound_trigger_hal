@@ -144,6 +144,23 @@ size_t oslo_driver_set_param_blk(struct ia_sensor_mgr *smd, uint32_t param_blk_i
     return bytes_written;
 }
 
+int oslo_driver_get_stats(struct ia_sensor_mgr *smd, struct iaxxx_sensor_mode_stats stats[]) {
+    int rc = 0;
+
+    if (NULL == smd || NULL == stats) {
+        ALOGE("%s: NULL argument passed", __func__);
+        return -EINVAL;
+    }
+
+    rc = ioctl(fileno(smd->dev_node), IAXXX_SENSOR_MODE_STATS, (unsigned long)stats);
+    if (rc != 0) {
+        ALOGE("%s: ERROR: IAXXX_SENSOR_MODE_STATS failed with error %d(%s)", __func__, errno,
+              strerror(errno));
+    }
+
+    return rc;
+}
+
 void oslo_plugin_set_param(int param_id, uint32_t param_val) {
     struct iaxxx_odsp_hw *ioh = NULL;
     int err = 0;
