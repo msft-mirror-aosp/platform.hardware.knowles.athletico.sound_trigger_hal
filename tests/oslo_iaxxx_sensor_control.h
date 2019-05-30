@@ -35,6 +35,8 @@ extern "C" {
 #include <time.h>
 #include <unistd.h>
 
+#include "iaxxx-module.h"
+
 /* copy of SensorDriver.h from polygon */
 #define SENSOR_MAX_PARAMBLK_SIZE (1024 * 4)
 
@@ -53,6 +55,7 @@ typedef enum {
     SENSOR_PARAM_FRAMES_PROCESSED,
     SENSOR_PARAM_WATCHDOG_RECOVERY_COUNT,
     SENSOR_PARAM_PRESET_RADAR_CONFIG,
+    SENSOR_PARAM_DUMP_STATS,
 
     /* oslo preset configurations */
     OSLO_CONFIG_DEFAULT = OSLO_PRESET_CONFIG_START_INDEX,
@@ -189,6 +192,7 @@ void oslo_driver_set_param(struct ia_sensor_mgr *smd, int param_id, float param_
 uint32_t oslo_driver_get_param(struct ia_sensor_mgr *smd, int param_id);
 size_t oslo_driver_set_param_blk(struct ia_sensor_mgr *smd, uint32_t param_blk_id,
                                  const void *blk_data, uint32_t blk_size);
+int oslo_driver_get_stats(struct ia_sensor_mgr *smd, struct iaxxx_sensor_mode_stats stats[]);
 void oslo_plugin_set_param(int param_id, uint32_t param_val);
 uint32_t oslo_plugin_get_param(int param_id);
 
