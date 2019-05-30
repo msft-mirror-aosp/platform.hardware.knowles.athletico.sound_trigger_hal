@@ -510,6 +510,14 @@ int sensor_event_init_params(struct iaxxx_odsp_hw *odsp_hdl)
         goto exit;
     }
 
+    err = iaxxx_odsp_evt_subscribe(odsp_hdl, IAXXX_SYSID_HOST_1,
+                                   OSLO_EP_DISCONNECT, IAXXX_SYSID_HOST_0, 0);
+    if (err == -1) {
+        ALOGE("%s: ERROR: oslo event subscription (oslo ep disconnect) failed with"
+              " error %d(%s)", __func__, errno, strerror(errno));
+        goto exit;
+    }
+
     err = iaxxx_odsp_evt_trigger(odsp_hdl, OSLO_EVT_SRC_ID, OSLO_CONFIGURED, 0);
     if (err != 0) {
         ALOGE("%s: ERROR: olso event trigger (oslo configured) failed %d(%s)",
@@ -528,13 +536,6 @@ static int sensor_event_deinit_params(struct iaxxx_odsp_hw *odsp_hdl)
     int err = 0;
 
     ALOGD("+%s+", __func__);
-
-    err = iaxxx_odsp_evt_trigger(odsp_hdl, OSLO_EVT_SRC_ID, OSLO_DESTROYED, 0);
-    if (err != 0) {
-        ALOGE("%s: ERROR: Oslo event trigger (oslo destroyed) failed %d(%s)",
-            __func__, errno, strerror(errno));
-        goto exit;
-    }
 
     err = iaxxx_odsp_evt_unsubscribe(odsp_hdl, OSLO_EVT_SRC_ID, SENSOR_MAX_MODE,
                                     IAXXX_SYSID_HOST);
@@ -579,6 +580,15 @@ static int sensor_event_deinit_params(struct iaxxx_odsp_hw *odsp_hdl)
               " from host %d error %d(%s)", __func__, OSLO_EVT_SRC_ID,
               OSLO_DESTROYED, IAXXX_SYSID_HOST_1, errno, strerror(errno));
         goto exit;
+    }
+
+    err = iaxxx_odsp_evt_unsubscribe(odsp_hdl, IAXXX_SYSID_HOST_1,
+                                OSLO_EP_DISCONNECT, IAXXX_SYSID_HOST_0);
+    if (err != 0) {
+        ALOGE("%s: Failed to unsubscribe sensor event (src id %d event id %d)"
+              " from host %d with the error %d(%s)", __func__, IAXXX_SYSID_HOST_1,
+              OSLO_EP_DISCONNECT, IAXXX_SYSID_HOST_0, errno, strerror(errno));
+         goto exit;
     }
 
     ALOGD("-%s-", __func__);
@@ -1122,6 +1132,21 @@ int destroy_sensor_package(struct iaxxx_odsp_hw *odsp_hdl)
     ALOGD("-%s-", __func__);
 
 exit:
+    return err;
+}
+
+int trigger_sensor_destroy_event(struct iaxxx_odsp_hw *odsp_hdl)
+{
+    int err = 0;
+
+    ALOGD("+%s+", __func__);
+
+    err = iaxxx_odsp_evt_trigger(odsp_hdl, OSLO_EVT_SRC_ID, OSLO_DESTROYED, 0);
+    if (err == -1)
+        ALOGE("%s: ERROR: oslo event trigger (oslo destroyed) failed with "
+              "error %d(%s)", __func__, errno, strerror(errno));
+
+    ALOGD("-%s-", __func__);
     return err;
 }
 
