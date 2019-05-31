@@ -78,6 +78,12 @@
 #define MIXER_INSTANCE_ID  7
 #define MIXER_PRIORITY     1
 
+#define SRC_PKG_ID       3
+#define SRC_PLUGIN_IDX   0
+#define SRC_PRIORITY     1
+#define SRC_MIC_INSTANCE_ID  6
+#define SRC_AMP_INSTANCE_ID  7
+
 #define BUF_PKG_ID          4
 #define BUF_PLUGIN_IDX      0
 #define BUF_INSTANCE_ID     1
@@ -111,10 +117,16 @@
 #define SENSOR_CONFIG_VAL           "OsloSensorConfig.bin"
 #define ECHOCANCELLER_PACKAGE       "EchoCancellerPackage.bin"
 #define MIXER_PACKAGE               "AScalarSimpleMixerPackage.bin"
+#define SRC_PACKAGE                 "SampleRateConverterPackage.bin"
+#define SRC_CONFIG                  "SampleRateConverterCreateCfgBlkGen.bin"
 
 #define MIC_ROUTE                            "mic1-route"
 #define MIC_ROUTE_EXT_CLK                    "mic-route-external-clock"
 #define MIC_ROUTE_INT_CLK                    "mic-route-internal-clock"
+#define SRC_ROUTE_MIC                        "src-route-mic"
+#define SRC_ROUTE_AMP_REF                    "src-route-amp-ref"
+#define BARGEIN_AMP_REF                      "bargein-amp-ref"
+#define BARGEIN_AMP_REF_48K                  "bargein-amp-ref-48k"
 #define BARGEIN_ROUTE                        "bargein-route"
 #define DOWNLINK_AUDIO_ROUTE                 "downlink-audio-route"
 #define MUSIC_AUDIO_ROUTE                    "music-audio-route"
@@ -146,6 +158,24 @@ enum clock_type {
     EXTERNAL_OSCILLATOR
 };
 
+enum src_type {
+    SRC_MIC,
+    SRC_AMP_REF
+};
+
+enum strm_type {
+    STRM_16K,
+    STRM_48K
+};
+
+enum sthal_mode {
+    IN_CALL,
+    CON_DISABLED_ST,
+    CON_DISABLED_CAPTURE,
+    CON_ENABLED_ST,
+    CON_ENABLED_CAPTURE_ST
+};
+
 #define PLUGIN_DEF_CONFIG_ID    0
 
 int write_model(struct iaxxx_odsp_hw *odsp_hdl, unsigned char *data,
@@ -169,15 +199,22 @@ int setup_sensor_package(struct iaxxx_odsp_hw *odsp_hdl);
 int destroy_sensor_package(struct iaxxx_odsp_hw *odsp_hdl);
 int setup_mixer_package(struct iaxxx_odsp_hw *odsp_hdl);
 int destroy_mixer_package(struct iaxxx_odsp_hw *odsp_hdl);
+int setup_src_package(struct iaxxx_odsp_hw *odsp_hdl);
+int destory_src_package(struct iaxxx_odsp_hw *odsp_hdl);
 
 int setup_music_buffer(struct iaxxx_odsp_hw *odsp_hdl);
 int destroy_music_buffer(struct iaxxx_odsp_hw *odsp_hdl);
 int setup_howord_buffer(struct iaxxx_odsp_hw *odsp_hdl);
 int destroy_howord_buffer(struct iaxxx_odsp_hw *odsp_hdl);
+int setup_src_plugin(struct iaxxx_odsp_hw *odsp_hdl, enum src_type st);
+int destroy_src_plugin(struct iaxxx_odsp_hw *odsp_hdl, enum src_type st);
 int set_hotword_buffer_route(struct audio_route *route_hdl, bool bargein);
 int tear_hotword_buffer_route(struct audio_route *route_hdl, bool bargein);
 int enable_mic_route(struct audio_route *route_hdl, bool enable,
                     enum clock_type ct);
+int enable_amp_ref_route(struct audio_route *route_hdl, bool enable,
+                         enum strm_type strmt);
+int enable_src_route(struct audio_route *route_hdl, bool enable, enum src_type st);
 int set_sensor_route(struct audio_route *route_hdl, bool enable);
 int set_ambient_state(struct iaxxx_odsp_hw *odsp_hdl, unsigned int current);
 int tear_ambient_state(struct iaxxx_odsp_hw *odsp_hdl, unsigned int current);
