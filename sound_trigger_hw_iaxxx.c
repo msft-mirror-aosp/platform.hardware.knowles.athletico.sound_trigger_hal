@@ -73,6 +73,9 @@
 #define RETRY_NUMBER    (10)
 #define RETRY_US        (500000)
 
+#define SENSOR_CREATE_WAIT_TIME_IN_S   (1)
+#define SENSOR_CREATE_WAIT_MAX_COUNT   (5)
+
 #ifdef __LP64__
 #define ADNC_STRM_LIBRARY_PATH "/vendor/lib64/hw/adnc_strm.primary.default.so"
 #else
@@ -121,6 +124,7 @@ struct knowles_sound_trigger_device {
     sound_trigger_uuid_t authkw_model_uuid;
     pthread_t callback_thread;
     pthread_mutex_t lock;
+    pthread_cond_t sensor_create;
     int opened;
     int send_sock;
     int recv_sock;
@@ -146,6 +150,7 @@ struct knowles_sound_trigger_device {
     bool is_music_playing;
     bool is_bargein_route_enabled;
     bool is_buffer_package_loaded;
+    bool is_sensor_route_enabled;
     bool is_st_hal_ready;
     bool is_hmd_proc_on;
     bool is_dmx_proc_on;
@@ -153,6 +158,7 @@ struct knowles_sound_trigger_device {
     int music_buffer_enable;
     bool is_chre_enable;
     bool is_media_recording;
+    bool is_sensor_destroy_in_prog;
 
     unsigned int current_enable;
 
@@ -167,14 +173,21 @@ struct knowles_sound_trigger_device {
     int snd_crd_num;
     char mixer_path_xml[NAME_MAX_SIZE];
     bool fw_reset_done_by_hal;
+
+    // sensor stop signal event
+    timer_t ss_timer;
+    bool ss_timer_created;
 };
 
 /*
  * Since there's only ever one sound_trigger_device, keep it as a global so
  * that other people can dlopen this lib to get at the streaming audio.
  */
-static struct knowles_sound_trigger_device g_stdev = {
-    .lock = PTHREAD_MUTEX_INITIALIZER
+
+static struct knowles_sound_trigger_device g_stdev =
+{
+    .lock = PTHREAD_MUTEX_INITIALIZER,
+    .sensor_create = PTHREAD_COND_INITIALIZER
 };
 
 static bool check_uuid_equality(sound_trigger_uuid_t uuid1,
@@ -951,21 +964,38 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
         if (stdev->models[i].is_loaded == true) {
             if (check_uuid_equality(stdev->models[i].uuid,
                                     stdev->sensor_model_uuid)) {
-                // setup the sensor route
-                err = setup_sensor_package(stdev->odsp_hdl);
-                if (err != 0) {
-                    ALOGE("%s: setup Sensor package failed", __func__);
-                    goto exit;
-                }
                 err = set_sensor_route(stdev->route_hdl, false);
                 if (err != 0) {
                     ALOGE("%s: tear Sensor route fail", __func__);
                     goto exit;
                 }
-                err = set_sensor_route(stdev->route_hdl, true);
-                if (err != 0) {
-                    ALOGE("%s: Sensor route fail", __func__);
-                    goto exit;
+                stdev->is_sensor_route_enabled = false;
+
+                if (stdev->is_sensor_destroy_in_prog == true) {
+                    stdev->is_sensor_destroy_in_prog = false;
+                    pthread_cond_signal(&stdev->sensor_create);
+
+                    // A timer would have been created during stop,
+                    // check and delete it, as there is nothing to destroy
+                    // at this point
+                    if (stdev->ss_timer_created) {
+                        timer_delete(stdev->ss_timer);
+                        stdev->ss_timer_created = false;
+                    }
+                } else {
+                    // setup the sensor route
+                    err = setup_sensor_package(stdev->odsp_hdl);
+                    if (err != 0) {
+                        ALOGE("%s: setup Sensor package failed", __func__);
+                        goto exit;
+                    }
+
+                    err = set_sensor_route(stdev->route_hdl, true);
+                    if (err != 0) {
+                        ALOGE("%s: Sensor route fail", __func__);
+                        goto exit;
+                    }
+                    stdev->is_sensor_route_enabled = true;
                 }
             }
         }
@@ -992,6 +1022,155 @@ static int crash_recovery(struct knowles_sound_trigger_device *stdev)
 
     // Reset the flag only after successful recovery
     stdev->is_st_hal_ready = true;
+
+exit:
+    return err;
+}
+
+static void check_and_turn_off_hmd(struct knowles_sound_trigger_device *stdev)
+{
+    ALOGD("+%s+", __func__);
+
+    // Switch the processor off only if all packages are unloaded
+    if (!is_any_model_loaded(stdev) && stdev->is_hmd_proc_on) {
+        power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
+        stdev->is_hmd_proc_on = false;
+    }
+
+    ALOGD("-%s-", __func__);
+}
+
+static void remove_buffer(struct knowles_sound_trigger_device *stdev)
+{
+    ALOGD("+%s+", __func__);
+
+    if (!is_any_model_loaded(stdev) &&
+        stdev->is_buffer_package_loaded &&
+        !stdev->is_sensor_destroy_in_prog &&
+        !stdev->is_sensor_route_enabled) {
+        destroy_buffer_package(stdev->odsp_hdl);
+        stdev->is_buffer_package_loaded = false;
+    }
+
+    ALOGD("-%s-", __func__);
+}
+
+static void destroy_sensor_model(struct knowles_sound_trigger_device *stdev)
+{
+    int ret, i;
+    ALOGD("+%s+", __func__);
+
+    if (stdev->is_sensor_route_enabled == true) {
+        ret = set_sensor_route(stdev->route_hdl, false);
+        if (ret != 0) {
+            ALOGE("%s: tear Sensor route fail", __func__);
+        }
+        stdev->is_sensor_route_enabled = false;
+
+        ret = destroy_sensor_package(stdev->odsp_hdl);
+        if (ret != 0) {
+            ALOGE("%s: destroy Sensor package failed %d",
+                  __func__, ret);
+        }
+        stdev->current_enable = stdev->current_enable & ~OSLO_MASK;
+    }
+
+    // now we can change the flag
+    for (i = 0 ; i < MAX_MODELS ; i++) {
+        if (check_uuid_equality(stdev->models[i].uuid,
+                                stdev->sensor_model_uuid)) {
+            stdev->models[i].is_loaded = false;
+            break;
+        }
+    }
+
+    stdev->is_sensor_destroy_in_prog = false;
+    remove_buffer(stdev);
+    check_and_turn_off_hmd(stdev);
+
+    // There could be another thread waiting for us to destroy so signal that
+    // thread, if no one is waiting then this signal will have no effect
+    pthread_cond_signal(&stdev->sensor_create);
+
+    ALOGD("-%s-", __func__);
+}
+
+static void sensor_stop_timeout()
+{
+    ALOGD("+%s+", __func__);
+
+    struct knowles_sound_trigger_device *stdev = &g_stdev;
+    pthread_mutex_lock(&stdev->lock);
+    // We are here because we timed out so check if we still need to destroy
+    // the sensor package, if yes then go ahead otherwise do nothing
+    if (stdev->is_sensor_destroy_in_prog == true) {
+        destroy_sensor_model(stdev);
+    }
+    pthread_mutex_unlock(&stdev->lock);
+    ALOGD("-%s-", __func__);
+}
+
+static int start_sensor_model(struct knowles_sound_trigger_device * stdev)
+{
+    struct timespec ts;
+    int wait_counter = 0, err = 0;
+
+    while (stdev->is_sensor_destroy_in_prog == true &&
+           wait_counter < SENSOR_CREATE_WAIT_MAX_COUNT) {
+        // We wait for 1sec * MAX_COUNT times for the HOST 1 to respond, if
+        // within that time we don't get any response, we will go ahead with the
+        // sensor model creation. Note this might result in an error which would
+        // be better than blocking the thread indefinitely.
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += SENSOR_CREATE_WAIT_TIME_IN_S;
+        err = pthread_cond_timedwait(&stdev->sensor_create, &stdev->lock, &ts);
+        if (err == ETIMEDOUT) {
+            ALOGE("%s: WARNING: Sensor create timed out after %ds",
+                  __func__, SENSOR_CREATE_WAIT_TIME_IN_S);
+            wait_counter++;
+        }
+    }
+
+    // Reset timedout error
+    err = 0;
+
+    if (stdev->is_sensor_destroy_in_prog == true) {
+        ALOGE("%s: ERROR: Waited for %ds but we didn't get the event from "
+              "Host 1, forcing a destroy", __func__,
+              SENSOR_CREATE_WAIT_TIME_IN_S * SENSOR_CREATE_WAIT_MAX_COUNT);
+        stdev->is_sensor_destroy_in_prog = false;
+
+       if (stdev->is_sensor_route_enabled == true) {
+            err = set_sensor_route(stdev->route_hdl, false);
+            if (err) {
+                ALOGE("%s: Failed to tear sensor route", __func__);
+                goto exit;
+            }
+            err = destroy_sensor_package(stdev->odsp_hdl);
+            if (err) {
+                ALOGE("%s: ERROR: Failed to destroy sensor package", __func__);
+                goto exit;
+            }
+            stdev->is_sensor_route_enabled = false;
+        }
+    }
+
+    if(stdev->is_sensor_route_enabled == false) {
+        err = setup_sensor_package(stdev->odsp_hdl);
+        if (err) {
+            ALOGE("%s: Failed to setup sensor package", __func__);
+            goto exit;
+        }
+        // Don't download the keyword model file, just setup the
+        // sensor route
+        err = set_sensor_route(stdev->route_hdl, true);
+        if (err) {
+            ALOGE("%s: Sensor route fail", __func__);
+            goto exit;
+        }
+        stdev->is_sensor_route_enabled = true;
+        stdev->current_enable = stdev->current_enable | OSLO_MASK;
+    }
 
 exit:
     return err;
@@ -1116,6 +1295,24 @@ static void *callback_thread_loop(void *context)
                                 AMBIENT_KW_ID);
                             kwid = AMBIENT_KW_ID;
                             reset_ambient_plugin(stdev->odsp_hdl);
+                        } else if (ge.event_id == OSLO_EP_DISCONNECT) {
+                            ALOGD("Eventid received is OSLO_EP_DISCONNECT %d",
+                                  OSLO_EP_DISCONNECT);
+                            if (stdev->is_sensor_destroy_in_prog == true) {
+                                destroy_sensor_model(stdev);
+
+                                // A timer would have been created during stop,
+                                // check and delete it
+                                if (stdev->ss_timer_created) {
+                                    timer_delete(stdev->ss_timer);
+                                    stdev->ss_timer_created = false;
+                                }
+                            } else {
+                                ALOGE("Unexpected OSLO_EP_DISCONNECT received"
+                                      ", ignoring..");
+                            }
+
+                            break;
                         } else if (ge.event_id == ENTITY_KW_ID) {
                             ALOGD("Eventid received is ENTITY_KW_ID %d",
                                 ENTITY_KW_ID);
@@ -1468,16 +1665,9 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
     } else if (check_uuid_equality(stdev->models[i].uuid,
                                 stdev->sensor_model_uuid)) {
         // setup the sensor route
-        stdev->current_enable = stdev->current_enable | OSLO_MASK;
-        ret = setup_sensor_package(stdev->odsp_hdl);
-        if (ret != 0) {
-            ALOGE("%s: setup Sensor package failed", __func__);
-            goto exit;
-        }
-
-        ret = set_sensor_route(stdev->route_hdl, true);
-        if (ret != 0) {
-            ALOGE("%s: Sensor route fail", __func__);
+        ret = start_sensor_model(stdev);
+        if (ret) {
+            ALOGE("%s: ERROR: Failed to start sensor model", __func__);
             goto exit;
         }
         stdev->models[i].kw_id = USELESS_KW_ID;
@@ -1556,20 +1746,47 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
             goto exit;
     }
 
-
     if (check_uuid_equality(stdev->models[handle].uuid,
                                 stdev->sensor_model_uuid)) {
-        // Disable the sensor route
-        ret = set_sensor_route(stdev->route_hdl, false);
-        if (ret != 0) {
-            ALOGE("%s: disable Sensor route failed", __func__);
-        }
+        // Inform the Host 1 that sensor route/packages are about to be
+        // torndown and then wait for confirmation from Host 1 that it can be
+        // torndown. Also start a timer for 5 seconds, if the Host 1 doesn't
+        // send us the event within 5 seconds we force remove the sensor pkgs
+        if (stdev->is_sensor_route_enabled == true) {
+            struct itimerspec ss_timer_spec;
+            struct sigevent ss_sigevent;
 
-        ret = destroy_sensor_package(stdev->odsp_hdl);
-        if (ret != 0) {
-            ALOGE("%s: destroy Sensor package failed", __func__);
+            // Inform the host 1
+            stdev->is_sensor_destroy_in_prog = true;
+            trigger_sensor_destroy_event(stdev->odsp_hdl);
+
+            // Start timer for 5 seconds
+            ss_sigevent.sigev_notify = SIGEV_THREAD;
+            ss_sigevent.sigev_notify_function = sensor_stop_timeout;
+            ss_sigevent.sigev_notify_attributes = NULL;
+
+            ss_timer_spec.it_interval.tv_sec = 0;
+            ss_timer_spec.it_interval.tv_nsec = 0;
+            ss_timer_spec.it_value.tv_sec =
+                    SENSOR_CREATE_WAIT_TIME_IN_S * SENSOR_CREATE_WAIT_MAX_COUNT;
+            ss_timer_spec.it_value.tv_nsec = 0;
+
+            if (stdev->ss_timer_created) {
+                timer_delete(stdev->ss_timer);
+                stdev->ss_timer_created = false;
+            }
+
+            if (timer_create(CLOCK_REALTIME,
+                             &ss_sigevent, &stdev->ss_timer) == -1) {
+                ALOGE("%s: Timer Create Failed", __func__);
+            } else {
+                stdev->ss_timer_created = true;
+                if (timer_settime(stdev->ss_timer,
+                                  0, &ss_timer_spec, NULL) == -1) {
+                    ALOGE("%s: Timer Set Failed", __func__);
+                }
+            }
         }
-        stdev->current_enable = stdev->current_enable & ~OSLO_MASK;
     } else if (check_uuid_equality(stdev->models[handle].uuid,
                                 stdev->chre_model_uuid)) {
         if (stdev->models[handle].is_active == true) {
@@ -1584,7 +1801,12 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
 
     stdev->models[handle].sound_model_callback = NULL;
     stdev->models[handle].sound_model_cookie = NULL;
-    stdev->models[handle].is_loaded = false;
+
+    if (!(check_uuid_equality(stdev->models[handle].uuid,
+                                stdev->sensor_model_uuid) &&
+            stdev->is_sensor_destroy_in_prog))
+        stdev->models[handle].is_loaded = false;
+
     if (stdev->models[handle].data) {
         free(stdev->models[handle].data);
         stdev->models[handle].data = NULL;
@@ -1844,6 +2066,11 @@ static int stdev_close(hw_device_t *device)
         audio_route_free(stdev->route_hdl);
     if (stdev->odsp_hdl)
         iaxxx_odsp_deinit(stdev->odsp_hdl);
+
+    if (stdev->ss_timer_created) {
+        timer_delete(stdev->ss_timer);
+        stdev->ss_timer_created = false;
+    }
 
 exit:
     pthread_mutex_unlock(&stdev->lock);
@@ -2139,10 +2366,14 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->hotword_buffer_enable = 0;
     stdev->music_buffer_enable = 0;
     stdev->current_enable = 0;
+    stdev->is_sensor_route_enabled = false;
     stdev->is_hmd_proc_on = false;
     stdev->is_dmx_proc_on = false;
     stdev->is_chre_enable = false;
     stdev->is_media_recording = false;
+
+    stdev->is_sensor_destroy_in_prog = false;
+    stdev->ss_timer_created = false;
 
     stdev->snd_crd_num = snd_card_num;
     stdev->fw_reset_done_by_hal = false;
