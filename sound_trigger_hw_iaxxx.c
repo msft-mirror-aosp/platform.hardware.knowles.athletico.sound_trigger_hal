@@ -136,7 +136,7 @@ struct knowles_sound_trigger_device {
     int (*adnc_strm_open)(bool, int, int);
     size_t (*adnc_strm_read)(long, void *, size_t);
     int (*adnc_strm_close)(long);
-    long adnc_strm_handle;
+    long adnc_strm_handle[MAX_MODELS];
 
     sound_trigger_uuid_t hotword_model_uuid;
     sound_trigger_uuid_t sensor_model_uuid;
@@ -2105,7 +2105,9 @@ static int open_streaming_lib(struct knowles_sound_trigger_device *stdev) {
         } else {
             ALOGV("%s: DLOPEN successful for %s",
                 __func__, ADNC_STRM_LIBRARY_PATH);
-            stdev->adnc_strm_handle = 0;
+            for (int index = 0; index < MAX_MODELS; index++) {
+                stdev->adnc_strm_handle[index] = 0;
+            }
             stdev->adnc_strm_open =
                 (int (*)(bool, int, int))dlsym(stdev->adnc_cvq_strm_lib,
                 "adnc_strm_open");
@@ -2430,6 +2432,7 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
 {
     int ret = 0;
     int i = 0;
+    int index = -1;
     struct knowles_sound_trigger_device *stdev = &g_stdev;
     if (!stdev)
         return -ENODEV;
@@ -2698,11 +2701,41 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         break;
     case AUDIO_EVENT_STOP_LAB:
         /* Close Stream Driver */
-        ALOGD("%s: close streaming %d", __func__, event);
-        if (stdev->adnc_strm_handle) {
-            stdev->adnc_strm_close(stdev->adnc_strm_handle);
-            stdev->adnc_strm_handle = 0;
-            stdev->is_streaming = 0;
+        for (i = 0; i < MAX_MODELS; i++) {
+            if (stdev->models[i].is_active &&
+                (stdev->models[i].config->capture_handle ==
+                 config->u.ses_info.capture_handle)) {
+                index = i;
+                break;
+            }
+        }
+
+        /*
+         * Close unused adnc if ...
+         * 1. No capture handle is found
+         * 2. Model is inactive
+         * 3. adnc stream handle is existed
+         */
+        if (index == -1 && stdev->is_streaming > 0) {
+            ALOGD("%s: close unused adnc handle, cap_handle:%d", __func__,
+                  config->u.ses_info.capture_handle);
+            for (i = 0; i < MAX_MODELS; i++) {
+                if (stdev->adnc_strm_handle[i] != 0 &&
+                    !stdev->models[i].is_active) {
+                    stdev->adnc_strm_close(stdev->adnc_strm_handle[i]);
+                    stdev->adnc_strm_handle[i] = 0;
+                    stdev->is_streaming--;
+                }
+            }
+            goto exit;
+        }
+
+        ALOGD("%s: close streaming %d, cap_handle:%d",
+              __func__, event, config->u.ses_info.capture_handle);
+        if (stdev->adnc_strm_handle[index]) {
+            stdev->adnc_strm_close(stdev->adnc_strm_handle[index]);
+            stdev->adnc_strm_handle[index] = 0;
+            stdev->is_streaming--;
         }
 
         break;
@@ -2713,8 +2746,24 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         break;
 
     case AUDIO_EVENT_READ_SAMPLES:
+        /* It is possible to change session info, check config */
+        if (config->u.aud_info.ses_info == NULL) {
+            ALOGE("%s: Invalid config, event:%d", __func__, event);
+            ret = -EINVAL;
+            goto exit;
+        }
+
+        for (i = 0; i < MAX_MODELS; i++) {
+            if (stdev->models[i].is_active &&
+                (stdev->models[i].config->capture_handle ==
+                 config->u.aud_info.ses_info->capture_handle)) {
+                index = i;
+                break;
+            }
+        }
+
         /* Open Stream Driver */
-        if (stdev->is_streaming == false) {
+        if (index != -1 && stdev->adnc_strm_handle[index] == 0) {
             if (stdev->adnc_strm_open == NULL) {
                 ALOGE("%s: Error adnc streaming not supported", __func__);
             } else {
@@ -2732,23 +2781,26 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                         stream_end_point = CVQ_ENDPOINT;
                         break;
                 };
-                stdev->adnc_strm_handle = stdev->adnc_strm_open(
+                stdev->adnc_strm_handle[index] = stdev->adnc_strm_open(
                                             keyword_stripping_enabled, 0,
                                             stream_end_point);
-                if (stdev->adnc_strm_handle) {
-                    ALOGD("Successfully opened adnc streaming");
-                    stdev->is_streaming = true;
+                if (stdev->adnc_strm_handle[index]) {
+                    ALOGD("Successfully opened adnc strm! index %d handle %d",
+                          index, config->u.aud_info.ses_info->capture_handle);
+                    stdev->is_streaming++;
                 } else {
                     ALOGE("%s: DSP is currently not streaming", __func__);
                 }
             }
         }
-        /* Read pcm data from tunnel */
-        if (stdev->is_streaming == true) {
+
+        if (index != -1 && stdev->adnc_strm_handle[index] != 0) {
             //ALOGD("%s: soundtrigger HAL adnc_strm_read", __func__);
-            stdev->adnc_strm_read(stdev->adnc_strm_handle,
+            pthread_mutex_unlock(&stdev->lock);
+            stdev->adnc_strm_read(stdev->adnc_strm_handle[index],
                                 config->u.aud_info.buf,
                                 config->u.aud_info.num_bytes);
+            pthread_mutex_lock(&stdev->lock);
         } else {
             ALOGE("%s: soundtrigger is not streaming", __func__);
         }
