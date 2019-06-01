@@ -378,9 +378,15 @@ read_again:
             bytes);
 
 #ifdef ENABLE_DEBUG_DUMPS
-    FILE *out_fp = fopen("/data/data/adnc_dump", "ab");
+    char l_buffer[64];
+    int cx;
+    FILE *out_fp = NULL;
+    cx = snprintf(l_buffer, sizeof(l_buffer), "/data/data/adnc_dump_%x",
+                  adnc_strm_dev->end_point);
+    if (cx >= 0 && cx < 64)
+        out_fp = fopen(l_buffer, "ab");
     if (out_fp) {
-        ALOGE("Dumping to adnc_dump");
+        ALOGD("Dumping to adnc_dump:%s", l_buffer);
         fwrite(buffer, bytes, 1, out_fp);
         fflush(out_fp);
         fclose(out_fp);
