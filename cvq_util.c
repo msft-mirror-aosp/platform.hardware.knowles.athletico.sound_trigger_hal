@@ -510,6 +510,14 @@ int sensor_event_init_params(struct iaxxx_odsp_hw *odsp_hdl)
         goto exit;
     }
 
+    err = iaxxx_odsp_evt_subscribe(odsp_hdl, IAXXX_SYSID_HOST_1,
+                                   OSLO_EP_DISCONNECT, IAXXX_SYSID_HOST_0, 0);
+    if (err == -1) {
+        ALOGE("%s: ERROR: oslo event subscription (oslo ep disconnect) failed with"
+              " error %d(%s)", __func__, errno, strerror(errno));
+        goto exit;
+    }
+
     err = iaxxx_odsp_evt_trigger(odsp_hdl, OSLO_EVT_SRC_ID, OSLO_CONFIGURED, 0);
     if (err != 0) {
         ALOGE("%s: ERROR: olso event trigger (oslo configured) failed %d(%s)",
@@ -528,13 +536,6 @@ static int sensor_event_deinit_params(struct iaxxx_odsp_hw *odsp_hdl)
     int err = 0;
 
     ALOGD("+%s+", __func__);
-
-    err = iaxxx_odsp_evt_trigger(odsp_hdl, OSLO_EVT_SRC_ID, OSLO_DESTROYED, 0);
-    if (err != 0) {
-        ALOGE("%s: ERROR: Oslo event trigger (oslo destroyed) failed %d(%s)",
-            __func__, errno, strerror(errno));
-        goto exit;
-    }
 
     err = iaxxx_odsp_evt_unsubscribe(odsp_hdl, OSLO_EVT_SRC_ID, SENSOR_MAX_MODE,
                                     IAXXX_SYSID_HOST);
@@ -579,6 +580,15 @@ static int sensor_event_deinit_params(struct iaxxx_odsp_hw *odsp_hdl)
               " from host %d error %d(%s)", __func__, OSLO_EVT_SRC_ID,
               OSLO_DESTROYED, IAXXX_SYSID_HOST_1, errno, strerror(errno));
         goto exit;
+    }
+
+    err = iaxxx_odsp_evt_unsubscribe(odsp_hdl, IAXXX_SYSID_HOST_1,
+                                OSLO_EP_DISCONNECT, IAXXX_SYSID_HOST_0);
+    if (err != 0) {
+        ALOGE("%s: Failed to unsubscribe sensor event (src id %d event id %d)"
+              " from host %d with the error %d(%s)", __func__, IAXXX_SYSID_HOST_1,
+              OSLO_EP_DISCONNECT, IAXXX_SYSID_HOST_0, errno, strerror(errno));
+         goto exit;
     }
 
     ALOGD("-%s-", __func__);
@@ -1125,6 +1135,21 @@ exit:
     return err;
 }
 
+int trigger_sensor_destroy_event(struct iaxxx_odsp_hw *odsp_hdl)
+{
+    int err = 0;
+
+    ALOGD("+%s+", __func__);
+
+    err = iaxxx_odsp_evt_trigger(odsp_hdl, OSLO_EVT_SRC_ID, OSLO_DESTROYED, 0);
+    if (err == -1)
+        ALOGE("%s: ERROR: oslo event trigger (oslo destroyed) failed with "
+              "error %d(%s)", __func__, errno, strerror(errno));
+
+    ALOGD("-%s-", __func__);
+    return err;
+}
+
 int setup_mixer_package(struct iaxxx_odsp_hw *odsp_hdl)
 {
     int err = 0;
@@ -1176,6 +1201,45 @@ int destroy_mixer_package(struct iaxxx_odsp_hw *odsp_hdl)
     err = iaxxx_odsp_package_unload(odsp_hdl, MIXER_PKG_ID);
     if (err != 0) {
         ALOGE("%s: ERROR: Failed to unload sensor package error %d(%s)",
+            __func__, errno, strerror(errno));
+        goto exit;
+    }
+
+    ALOGD("-%s-", __func__);
+
+exit:
+    return err;
+}
+
+int setup_src_package(struct iaxxx_odsp_hw *odsp_hdl)
+{
+    int err = 0;
+
+    ALOGD("+%s+", __func__);
+
+    err = iaxxx_odsp_package_load(odsp_hdl, SRC_PACKAGE, SRC_PKG_ID);
+    if (err != 0) {
+        ALOGE("%s: ERROR: Failed to load SRC package %d(%s)",
+            __func__, errno, strerror(errno));
+        goto exit;
+    }
+
+    ALOGD("-%s-", __func__);
+
+exit:
+    return err;
+
+}
+
+int destory_src_package(struct iaxxx_odsp_hw *odsp_hdl)
+{
+    int err = 0;
+
+    ALOGD("+%s+", __func__);
+
+    err = iaxxx_odsp_package_unload(odsp_hdl, SRC_PKG_ID);
+    if (err != 0) {
+        ALOGE("%s: ERROR: Failed to unload SRC package error %d(%s)",
             __func__, errno, strerror(errno));
         goto exit;
     }
@@ -1300,6 +1364,83 @@ exit:
     return err;
 }
 
+int setup_src_plugin(struct iaxxx_odsp_hw *odsp_hdl, enum src_type st)
+{
+    int err = 0;
+    int plugin_instant_id = 0;
+    struct iaxxx_create_config_data cdata;
+
+    if (st == SRC_MIC) {
+        plugin_instant_id = SRC_MIC_INSTANCE_ID;
+    } else if (st == SRC_AMP_REF) {
+        plugin_instant_id = SRC_AMP_INSTANCE_ID;
+    } else {
+        ALOGE("%s: Invalid src type %d", __func__, st);
+        err = -EINVAL;
+        goto exit;
+    }
+
+    ALOGD("+%s+ src type %d", __func__, st);
+
+    // set src config
+    cdata.type = CONFIG_FILE;
+    cdata.data.fdata.filename = SRC_CONFIG;
+    err = iaxxx_odsp_plugin_set_creation_config(odsp_hdl,
+                                plugin_instant_id,
+                                IAXXX_HMD_BLOCK_ID,
+                                cdata);
+    if (err != 0) {
+        ALOGE("%s: ERROR: SRC-%d configuration failed %d(%s)",
+            __func__, st, errno, strerror(errno));
+        goto exit;
+    }
+
+    err = iaxxx_odsp_plugin_create(odsp_hdl, plugin_instant_id,
+                                SRC_PRIORITY, SRC_PKG_ID,
+                                SRC_PLUGIN_IDX, IAXXX_HMD_BLOCK_ID,
+                                PLUGIN_DEF_CONFIG_ID);
+    if (err != 0) {
+        ALOGE("%s: ERROR: Failed to create SRC-%d plugin %d(%s)",
+            __func__, st, errno, strerror(errno));
+        goto exit;
+    }
+
+    ALOGD("-%s-", __func__);
+
+exit:
+    return err;
+}
+
+int destroy_src_plugin(struct iaxxx_odsp_hw *odsp_hdl, enum src_type st)
+{
+    int err = 0;
+    int plugin_instant_id = 0;
+
+    if (st == SRC_MIC) {
+        plugin_instant_id = SRC_MIC_INSTANCE_ID;
+    } else if (st == SRC_AMP_REF) {
+        plugin_instant_id = SRC_AMP_INSTANCE_ID;
+    } else {
+        ALOGE("%s: Invalid src type %d", __func__, st);
+        err = -EINVAL;
+        goto exit;
+    }
+    ALOGD("+%s+ src type %d", __func__, st);
+
+    err = iaxxx_odsp_plugin_destroy(odsp_hdl, plugin_instant_id,
+                                    IAXXX_HMD_BLOCK_ID);
+    if (err != 0) {
+        ALOGE("%s: ERROR: Failed to destroy SRC plugin %d(%s)",
+            __func__, errno, strerror(errno));
+        goto exit;
+    }
+
+    ALOGD("-%s-", __func__);
+
+exit:
+    return err;
+}
+
 int set_hotword_buffer_route(struct audio_route *route_hdl, bool bargein)
 {
     int err = 0;
@@ -1354,6 +1495,34 @@ int enable_bargein_route(struct audio_route *route_hdl, bool enable)
     return err;
 }
 
+int enable_amp_ref_route(struct audio_route *route_hdl, bool enable,
+                         enum strm_type strmt)
+{
+    int err = 0;
+
+    ALOGV("+%s+ %d strm type %d", __func__, enable, strmt);
+    if (strmt == STRM_16K) {
+        if (enable)
+            err = audio_route_apply_and_update_path(route_hdl, BARGEIN_AMP_REF);
+        else
+            err = audio_route_reset_and_update_path(route_hdl, BARGEIN_AMP_REF);
+    } else if (strmt == STRM_48K) {
+        if (enable)
+            err = audio_route_apply_and_update_path(route_hdl, BARGEIN_AMP_REF_48K);
+        else
+            err = audio_route_reset_and_update_path(route_hdl, BARGEIN_AMP_REF_48K);
+    } else {
+        ALOGE("%s: ERROR: Invalid strm type", __func__);
+        err = -EINVAL;
+    }
+
+    if (err)
+        ALOGE("%s: route fail %d", __func__, err);
+
+    ALOGD("-%s-", __func__);
+    return err;
+}
+
 int set_music_buffer_route(struct audio_route *route_hdl, bool downlink)
 {
     int err = 0;
@@ -1383,6 +1552,35 @@ int tear_music_buffer_route(struct audio_route *route_hdl, bool downlink)
     else
         err = audio_route_reset_and_update_path(route_hdl,
                                                 MUSIC_AUDIO_ROUTE);
+    if (err)
+        ALOGE("%s: route fail %d", __func__, err);
+
+    ALOGD("-%s-", __func__);
+    return err;
+}
+
+int enable_src_route(struct audio_route *route_hdl, bool enable, enum src_type st)
+{
+    int err = 0;
+
+    ALOGV("+%s+ %d src type %d", __func__, enable, st);
+
+    if (st == SRC_MIC) {
+        if (enable)
+            err = audio_route_apply_and_update_path(route_hdl, SRC_ROUTE_MIC);
+        else
+            err = audio_route_reset_and_update_path(route_hdl, SRC_ROUTE_MIC);
+    } else if (st == SRC_AMP_REF) {
+        if (enable)
+            err = audio_route_apply_and_update_path(route_hdl, SRC_ROUTE_AMP_REF);
+        else
+            err = audio_route_reset_and_update_path(route_hdl, SRC_ROUTE_AMP_REF);
+
+    } else {
+        ALOGE("%s: ERROR: Invalid src type", __func__);
+        err = -EINVAL;
+    }
+
     if (err)
         ALOGE("%s: route fail %d", __func__, err);
 

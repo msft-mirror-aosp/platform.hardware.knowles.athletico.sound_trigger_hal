@@ -73,6 +73,11 @@
 #define RETRY_NUMBER    (10)
 #define RETRY_US        (500000)
 
+#define SENSOR_CREATE_WAIT_TIME_IN_S   (1)
+#define SENSOR_CREATE_WAIT_MAX_COUNT   (5)
+
+#define ST_DEVICE_HANDSET_MIC 1
+
 #ifdef __LP64__
 #define ADNC_STRM_LIBRARY_PATH "/vendor/lib64/hw/adnc_strm.primary.default.so"
 #else
@@ -92,7 +97,7 @@ static const struct sound_trigger_properties hw_properties = {
     RECOGNITION_MODE_GENERIC_TRIGGER,
     true,                       // capture_transition
     MAX_BUFFER_MS,              // max_capture_ms
-    false,                      // concurrent_capture
+    true,                      // concurrent_capture
     false,                      // trigger_in_event
     POWER_CONSUMPTION           // power_consumption_mw
 };
@@ -121,6 +126,7 @@ struct knowles_sound_trigger_device {
     sound_trigger_uuid_t authkw_model_uuid;
     pthread_t callback_thread;
     pthread_mutex_t lock;
+    pthread_cond_t sensor_create;
     int opened;
     int send_sock;
     int recv_sock;
@@ -132,7 +138,7 @@ struct knowles_sound_trigger_device {
     int (*adnc_strm_open)(bool, int, int);
     size_t (*adnc_strm_read)(long, void *, size_t);
     int (*adnc_strm_close)(long);
-    long adnc_strm_handle;
+    long adnc_strm_handle[MAX_MODELS];
 
     sound_trigger_uuid_t hotword_model_uuid;
     sound_trigger_uuid_t sensor_model_uuid;
@@ -146,15 +152,24 @@ struct knowles_sound_trigger_device {
     bool is_music_playing;
     bool is_bargein_route_enabled;
     bool is_buffer_package_loaded;
+    bool is_sensor_route_enabled;
+    bool is_src_package_loaded;
     bool is_st_hal_ready;
     bool is_hmd_proc_on;
     bool is_dmx_proc_on;
     int hotword_buffer_enable;
     int music_buffer_enable;
-    bool is_chre_enable;
+    bool is_sensor_destroy_in_prog;
+
+    // mode conditions
     bool is_media_recording;
+    bool is_concurrent_capture;
+    bool is_con_mic_route_enabled;
+    bool is_in_voice_voip_mode;
+    bool is_voice_voip_stop;
 
     unsigned int current_enable;
+    unsigned int recover_model_list;
 
     struct audio_route *route_hdl;
     struct mixer *mixer;
@@ -167,15 +182,85 @@ struct knowles_sound_trigger_device {
     int snd_crd_num;
     char mixer_path_xml[NAME_MAX_SIZE];
     bool fw_reset_done_by_hal;
+
+    // sensor stop signal event
+    timer_t ss_timer;
+    bool ss_timer_created;
 };
 
 /*
  * Since there's only ever one sound_trigger_device, keep it as a global so
  * that other people can dlopen this lib to get at the streaming audio.
  */
-static struct knowles_sound_trigger_device g_stdev = {
-    .lock = PTHREAD_MUTEX_INITIALIZER
+
+static struct knowles_sound_trigger_device g_stdev =
+{
+    .lock = PTHREAD_MUTEX_INITIALIZER,
+    .sensor_create = PTHREAD_COND_INITIALIZER
 };
+
+static enum sthal_mode get_sthal_mode(struct knowles_sound_trigger_device *stdev)
+{
+    enum sthal_mode stmode = CON_DISABLED_ST;
+
+    if (stdev->is_in_voice_voip_mode == true) {
+        stmode = IN_CALL;
+        goto exit;
+    }
+
+    if (stdev->is_concurrent_capture == false) {
+        if (stdev->is_media_recording == true)
+          stmode = CON_DISABLED_CAPTURE;
+        else
+          stmode = CON_DISABLED_ST;
+        goto exit;
+    }
+
+    if (stdev->is_con_mic_route_enabled == true ) {
+        stmode = CON_ENABLED_CAPTURE_ST;
+        goto exit;
+    } else {
+        stmode = CON_ENABLED_ST;
+        goto exit;
+    }
+
+    ALOGW("%s: Invalid ST mode, use defualt mode", __func__);
+
+exit:
+    //ALOGV("%s: ST mode is %d", __func__, stmode);
+    return stmode;
+}
+
+static bool can_enable_chre(struct knowles_sound_trigger_device *stdev)
+{
+    bool ret = false;
+    enum sthal_mode stm = get_sthal_mode(stdev);
+
+    if (stm == CON_ENABLED_CAPTURE_ST ||
+        stm == CON_ENABLED_ST ||
+        stm == CON_DISABLED_ST)
+        ret = true;
+    return ret;
+}
+
+static bool can_update_recover_list(struct knowles_sound_trigger_device *stdev)
+{
+    bool ret = false;
+    enum sthal_mode stm = get_sthal_mode(stdev);
+
+    if (stm == IN_CALL || stm == CON_DISABLED_CAPTURE)
+        ret = true;
+    return ret;
+}
+
+static bool is_mic_controlled_by_audhal(struct knowles_sound_trigger_device *stdev)
+{
+    bool ret = false;
+
+    if (get_sthal_mode(stdev) == CON_ENABLED_CAPTURE_ST)
+        ret = true;
+    return ret;
+}
 
 static bool check_uuid_equality(sound_trigger_uuid_t uuid1,
                                 sound_trigger_uuid_t uuid2)
@@ -422,6 +507,56 @@ static void stdev_close_term_sock(struct knowles_sound_trigger_device *stdev)
         close(stdev->recv_sock);
         stdev->recv_sock = -1;
     }
+}
+
+static bool is_uuid_in_recover_list(struct knowles_sound_trigger_device *stdev,
+                                    sound_model_handle_t handle)
+{
+    int mask = 0;
+    sound_trigger_uuid_t target_uuid = stdev->models[handle].uuid;
+
+    if (check_uuid_equality(target_uuid, stdev->chre_model_uuid)) {
+        mask = CHRE_MASK;
+    } else if (check_uuid_equality(target_uuid, stdev->hotword_model_uuid) ||
+               check_uuid_equality(target_uuid, stdev->wakeup_model_uuid)) {
+        mask = PLUGIN1_MASK;
+    } else if (check_uuid_equality(target_uuid, stdev->ambient_model_uuid) ||
+               check_uuid_equality(target_uuid, stdev->entity_model_uuid)) {
+        mask = PLUGIN2_MASK;
+    } else {
+       //ALOGV("%s: Invalid uuid.", __func__);
+    }
+
+    return (stdev->recover_model_list & mask) ? true : false;
+}
+
+static void update_recover_list(struct knowles_sound_trigger_device *stdev,
+                                sound_model_handle_t handle,
+                                bool enable)
+{
+    int mask = 0;
+
+    sound_trigger_uuid_t target_uuid = stdev->models[handle].uuid;
+
+    ALOGD("%s: handle %d enable %d", __func__, handle, enable);
+    if (check_uuid_equality(target_uuid, stdev->chre_model_uuid)) {
+        mask = CHRE_MASK;
+    } else if (check_uuid_equality(target_uuid, stdev->hotword_model_uuid) ||
+               check_uuid_equality(target_uuid, stdev->wakeup_model_uuid)) {
+        mask = PLUGIN1_MASK;
+    } else if (check_uuid_equality(target_uuid, stdev->ambient_model_uuid) ||
+               check_uuid_equality(target_uuid, stdev->entity_model_uuid)) {
+        mask = PLUGIN2_MASK;
+    } else {
+       //ALOGV("%s: Invalid uuid.", __func__);
+    }
+
+    if (enable)
+        stdev->recover_model_list |= mask;
+    else
+        stdev->recover_model_list &= ~mask;
+
+    return;
 }
 
 static int setup_package(struct knowles_sound_trigger_device *stdev,
@@ -776,9 +911,14 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
 {
     int err = 0;
     enum clock_type ct = INTERNAL_OSCILLATOR;
+    enum strm_type strmt = STRM_16K;
 
     if (stdev->is_music_playing == true) {
         ct = EXTERNAL_OSCILLATOR;
+    }
+
+    if (is_mic_controlled_by_audhal(stdev) == true) {
+        strmt = STRM_48K;
     }
 
     /*
@@ -787,15 +927,44 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
      */
     if (enable) {
         if (stdev->is_mic_route_enabled == false) {
-            err = enable_mic_route(stdev->route_hdl, true, ct);
+            if (is_mic_controlled_by_audhal(stdev) == false) {
+                err = enable_mic_route(stdev->route_hdl, true, ct);
+                if (err != 0) {
+                    ALOGE("Failed to enable mic route");
+                    goto exit;
+                }
+            }
+            err = setup_src_plugin(stdev->odsp_hdl, SRC_MIC);
             if (err != 0) {
-                ALOGE("Failed to enable mic route");
+                ALOGE("Failed to load SRC package");
                 goto exit;
             }
+            err = enable_src_route(stdev->route_hdl, true, SRC_MIC);
+            if (err != 0) {
+                ALOGE("Failed to enable SRC-mic route");
+                goto exit;
+            }
+
             stdev->is_mic_route_enabled = true;
         }
         if (stdev->is_music_playing == true &&
             stdev->is_bargein_route_enabled == false) {
+
+            err = enable_amp_ref_route(stdev->route_hdl, true, strmt);
+            if (err != 0) {
+                ALOGE("Failed to amp-ref route");
+                goto exit;
+            }
+            err = setup_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
+            if (err != 0) {
+                ALOGE("Failed to load SRC-amp package");
+                goto exit;
+            }
+            err = enable_src_route(stdev->route_hdl, true, SRC_AMP_REF);
+            if (err != 0) {
+                ALOGE("Failed to enable SRC-amp route");
+                goto exit;
+            }
 
             err = setup_aec_package(stdev->odsp_hdl);
             if (err != 0) {
@@ -829,13 +998,41 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
                     ALOGE("Failed to unload AEC package");
                     goto exit;
                 }
+                err = enable_src_route(stdev->route_hdl, false, SRC_AMP_REF);
+                if (err != 0) {
+                    ALOGE("Failed to disable SRC-amp route");
+                    goto exit;
+                }
+                err = destroy_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
+                if (err != 0) {
+                    ALOGE("Failed to unload SRC-amp package");
+                    goto exit;
+                }
+                err = enable_amp_ref_route(stdev->route_hdl, false, strmt);
+                if (err != 0) {
+                    ALOGE("Failed to amp-ref route");
+                    goto exit;
+                }
                 stdev->is_bargein_route_enabled = false;
            }
            if (stdev->is_mic_route_enabled == true) {
-               err = enable_mic_route(stdev->route_hdl, false, ct);
+               // Close SRC package
+               err = enable_src_route(stdev->route_hdl, false, SRC_MIC);
                if (err != 0) {
-                   ALOGE("Failed to disable mic route");
+                   ALOGE("Failed to disable SRC-mic route");
                    goto exit;
+               }
+               err = destroy_src_plugin(stdev->odsp_hdl, SRC_MIC);
+               if (err != 0) {
+                   ALOGE("Failed to unload SRC-mic package");
+                   goto exit;
+               }
+               if (is_mic_controlled_by_audhal(stdev) == false) {
+                   err = enable_mic_route(stdev->route_hdl, false, ct);
+                   if (err != 0) {
+                       ALOGE("Failed to disable mic route");
+                       goto exit;
+                   }
                }
                stdev->is_mic_route_enabled = false;
            }
@@ -846,11 +1043,156 @@ exit:
     return err;
 }
 
+static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
+                                enum sthal_mode pre_mode,
+                                enum sthal_mode cur_mode,
+                                audio_event_type_t event)
+{
+    int ret = 0;
+    int i = 0;
+
+    ALOGD("+%s+: pre %d, cur %d, event %d", __func__, pre_mode, cur_mode, event);
+
+    // handle event AUDIO_EVENT_CAPTURE_DEVICE_ACTIVE
+    if (event == AUDIO_EVENT_CAPTURE_DEVICE_ACTIVE) {
+        if ((pre_mode == CON_DISABLED_ST && cur_mode == CON_DISABLED_CAPTURE) ||
+            (pre_mode == CON_DISABLED_ST && cur_mode == IN_CALL) ||
+            (pre_mode == CON_DISABLED_CAPTURE && cur_mode == IN_CALL) ||
+            (pre_mode == CON_ENABLED_CAPTURE_ST && cur_mode == IN_CALL) ||
+            (pre_mode == CON_ENABLED_ST && cur_mode == IN_CALL)) {
+            // disable all ST
+            for (i = 0; i < MAX_MODELS; i++) {
+                if (stdev->models[i].is_active == true) {
+                    update_recover_list(stdev, i, true);
+                    tear_package_route(stdev, stdev->models[i].uuid,
+                                    stdev->is_bargein_route_enabled);
+                    stdev->models[i].is_active = false;
+                    destroy_package(stdev, &stdev->models[i]);
+                    if ((stdev->hotword_buffer_enable) &&
+                        !(stdev->current_enable & PLUGIN1_MASK)) {
+                        tear_hotword_buffer_route(stdev->route_hdl,
+                                                stdev->is_bargein_route_enabled);
+                    }
+
+                    if ((stdev->music_buffer_enable) &&
+                        !(stdev->current_enable & PLUGIN2_MASK)) {
+                        tear_music_buffer_route(stdev->route_hdl,
+                                                stdev->is_bargein_route_enabled);
+                    }
+
+                    setup_buffer(stdev, &stdev->models[i], false);
+                }
+            }
+            handle_input_source(stdev, false);
+
+        } else if (pre_mode == CON_ENABLED_ST && cur_mode == CON_ENABLED_CAPTURE_ST) {
+            //reconfig mic
+            if (stdev->is_mic_route_enabled == true) {
+                if (stdev->is_bargein_route_enabled == true) {
+                    // close amp-ref first and reconfig it again with 48K after
+                    // main mic is turned on by media recording
+                    ret = enable_amp_ref_route(stdev->route_hdl, false, STRM_16K);
+                    if (ret != 0) {
+                        ALOGE("Failed to disable amp-ref route");
+                        goto exit;
+                    }
+                    ret = enable_mic_route(stdev->route_hdl, false,
+                                        EXTERNAL_OSCILLATOR);
+                    if (ret != 0) {
+                        ALOGE("Failed to disable mic route with EXT OSC");
+                        goto exit;
+                    }
+                } else {
+                    ret = enable_mic_route(stdev->route_hdl, false,
+                                        INTERNAL_OSCILLATOR);
+                    if (ret != 0) {
+                        ALOGE("Failed to disable mic route with INT OSC");
+                        goto exit;
+                    }
+                }
+            } else {
+                ALOGD("%s: ST mic isn't enabled, recording mic is turned on",
+                       __func__);
+            }
+        }
+    }
+
+    // handle event AUDIO_EVENT_CAPTURE_DEVICE_INACTIVE
+    if (event == AUDIO_EVENT_CAPTURE_DEVICE_INACTIVE) {
+        if ((pre_mode == IN_CALL && cur_mode == CON_DISABLED_ST) ||
+            (pre_mode == IN_CALL && cur_mode == CON_DISABLED_CAPTURE) ||
+            (pre_mode == IN_CALL && cur_mode == CON_ENABLED_ST) ||
+            (pre_mode == IN_CALL && cur_mode == CON_ENABLED_CAPTURE_ST) ||
+            (pre_mode == CON_DISABLED_CAPTURE && cur_mode == CON_DISABLED_ST)) {
+            //recover all STs
+            for (i = 0; i < MAX_MODELS; i++) {
+                // recover all models from list
+                if (is_uuid_in_recover_list(stdev, i)) {
+                    if (stdev->models[i].is_active == false) {
+                        stdev->models[i].is_active = true;
+                        handle_input_source(stdev, true);
+
+                        setup_buffer(stdev, &stdev->models[i], true);
+                        if (stdev->hotword_buffer_enable &&
+                            !(stdev->current_enable & PLUGIN1_MASK)) {
+                            set_hotword_buffer_route(stdev->route_hdl,
+                                            stdev->is_bargein_route_enabled);
+                        }
+                        if (stdev->music_buffer_enable &&
+                            !(stdev->current_enable & PLUGIN2_MASK)) {
+                            set_music_buffer_route(stdev->route_hdl,
+                                            stdev->is_bargein_route_enabled);
+                        }
+
+                        setup_package(stdev, &stdev->models[i]);
+                        set_package_route(stdev, stdev->models[i].uuid,
+                                        stdev->is_bargein_route_enabled);
+                    }
+                }
+            }
+            stdev->recover_model_list = 0;
+        } else if (pre_mode == CON_ENABLED_CAPTURE_ST && cur_mode == CON_ENABLED_ST) {
+            // reconfig mic
+            if (stdev->is_mic_route_enabled == true) {
+                if (stdev->is_bargein_route_enabled == true) {
+                    ret = enable_mic_route(stdev->route_hdl, true,
+                                        EXTERNAL_OSCILLATOR);
+                    if (ret != 0) {
+                        ALOGE("Failed to enable mic route with EXT OSC");
+                        goto exit;
+                    }
+                    // turn on amp-ref with 16khz
+                    ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_16K);
+                    if (ret != 0) {
+                        ALOGE("Failed to enable amp-ref route");
+                        goto exit;
+                    }
+                } else {
+                    ret = enable_mic_route(stdev->route_hdl, true,
+                                       INTERNAL_OSCILLATOR);
+                    if (ret != 0) {
+                        ALOGE("Failed to enable mic route with INT OSC");
+                        goto exit;
+                    }
+                }
+            } else {
+                ALOGD("%s: ST mic isn't enabled, recording mic is turned off",
+                      __func__);
+            }
+        }
+    }
+
+exit:
+    ALOGD("-%s-: pre %d, cur %d, event %d", __func__, pre_mode, cur_mode, event);
+    return ret;
+}
+
 // stdev needs to be locked before calling this function
 static int restart_recognition(struct knowles_sound_trigger_device *stdev)
 {
     int err = 0;
     int i = 0;
+    enum strm_type strmt = STRM_16K;
     enum clock_type ct = INTERNAL_OSCILLATOR;
     /*
      * The libaudioroute library doesn't set the mixer controls if previously
@@ -880,32 +1222,95 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
         }
     }
 
-    if (stdev->is_mic_route_enabled == true) {
-        err = enable_mic_route(stdev->route_hdl, false, ct);
+    if (stdev->is_src_package_loaded == true) {
+        err = setup_src_package(stdev->odsp_hdl);
         if (err != 0) {
-            ALOGE("failed to tear mic route");
+            ALOGE("%s: Failed to restart SRC package", __func__);
         }
-        err = enable_mic_route(stdev->route_hdl, true, ct);
+    }
+
+    /*
+     * Reset mic and src package if sound trigger recording is active
+     * If sound trigger recording isn't active, then we don't need to
+     * recover src package.
+     */
+    if (stdev->is_mic_route_enabled == true) {
+        if (is_mic_controlled_by_audhal(stdev) == false) {
+            err = enable_mic_route(stdev->route_hdl, false, ct);
+            if (err != 0) {
+                ALOGE("failed to tear mic route");
+            }
+            err = enable_mic_route(stdev->route_hdl, true, ct);
+            if (err != 0) {
+                ALOGE("failed to restart mic route");
+                goto exit;
+            }
+        }
+
+        // recover src package if sound trigger recording is active
+        err = setup_src_plugin(stdev->odsp_hdl, SRC_MIC);
         if (err != 0) {
-            ALOGE("failed to restart mic route");
+            ALOGE("failed to load SRC package");
+            goto exit;
+        }
+        err = enable_src_route(stdev->route_hdl, false, SRC_MIC);
+        if (err != 0) {
+            ALOGE("Failed to tear SRC-mic route");
+            goto exit;
+        }
+        err = enable_src_route(stdev->route_hdl, true, SRC_MIC);
+        if (err != 0) {
+            ALOGE("Failed to restart SRC-mic route");
+            goto exit;
         }
     }
 
     if (stdev->is_music_playing == true &&
         stdev->is_bargein_route_enabled == true) {
+        if (is_mic_controlled_by_audhal(stdev) == true) {
+            strmt = STRM_48K;
+        }
+        err = enable_amp_ref_route(stdev->route_hdl, false, strmt);
+        if (err != 0) {
+            ALOGE("Failed to tear amp-ref route");
+            goto exit;
+        }
+        err = enable_amp_ref_route(stdev->route_hdl, true, strmt);
+        if (err != 0) {
+            ALOGE("Failed to restart amp-ref route");
+            goto exit;
+        }
+
+        err = setup_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
+        if (err != 0) {
+            ALOGE("failed to load SRC package");
+            goto exit;
+        }
+        err = enable_src_route(stdev->route_hdl, false, SRC_AMP_REF);
+        if (err != 0) {
+            ALOGE("Failed to tear SRC-mic route");
+            goto exit;
+        }
+        err = enable_src_route(stdev->route_hdl, true, SRC_AMP_REF);
+        if (err != 0) {
+            ALOGE("Failed to restart SRC-mic route");
+            goto exit;
+        }
+
         err = setup_aec_package(stdev->odsp_hdl);
         if (err != 0) {
             ALOGE("Failed to restart AEC package");
+            goto exit;
         }
-
         err = enable_bargein_route(stdev->route_hdl, false);
         if (err != 0) {
             ALOGE("Failed to tear bargein route");
+            goto exit;
         }
-
         err = enable_bargein_route(stdev->route_hdl, true);
         if (err != 0) {
             ALOGE("Failed to restart bargein route");
+            goto exit;
         }
     }
 
@@ -951,21 +1356,38 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
         if (stdev->models[i].is_loaded == true) {
             if (check_uuid_equality(stdev->models[i].uuid,
                                     stdev->sensor_model_uuid)) {
-                // setup the sensor route
-                err = setup_sensor_package(stdev->odsp_hdl);
-                if (err != 0) {
-                    ALOGE("%s: setup Sensor package failed", __func__);
-                    goto exit;
-                }
                 err = set_sensor_route(stdev->route_hdl, false);
                 if (err != 0) {
                     ALOGE("%s: tear Sensor route fail", __func__);
                     goto exit;
                 }
-                err = set_sensor_route(stdev->route_hdl, true);
-                if (err != 0) {
-                    ALOGE("%s: Sensor route fail", __func__);
-                    goto exit;
+                stdev->is_sensor_route_enabled = false;
+
+                if (stdev->is_sensor_destroy_in_prog == true) {
+                    stdev->is_sensor_destroy_in_prog = false;
+                    pthread_cond_signal(&stdev->sensor_create);
+
+                    // A timer would have been created during stop,
+                    // check and delete it, as there is nothing to destroy
+                    // at this point
+                    if (stdev->ss_timer_created) {
+                        timer_delete(stdev->ss_timer);
+                        stdev->ss_timer_created = false;
+                    }
+                } else {
+                    // setup the sensor route
+                    err = setup_sensor_package(stdev->odsp_hdl);
+                    if (err != 0) {
+                        ALOGE("%s: setup Sensor package failed", __func__);
+                        goto exit;
+                    }
+
+                    err = set_sensor_route(stdev->route_hdl, true);
+                    if (err != 0) {
+                        ALOGE("%s: Sensor route fail", __func__);
+                        goto exit;
+                    }
+                    stdev->is_sensor_route_enabled = true;
                 }
             }
         }
@@ -992,6 +1414,155 @@ static int crash_recovery(struct knowles_sound_trigger_device *stdev)
 
     // Reset the flag only after successful recovery
     stdev->is_st_hal_ready = true;
+
+exit:
+    return err;
+}
+
+static void check_and_turn_off_hmd(struct knowles_sound_trigger_device *stdev)
+{
+    ALOGD("+%s+", __func__);
+
+    // Switch the processor off only if all packages are unloaded
+    if (!is_any_model_loaded(stdev) && stdev->is_hmd_proc_on) {
+        power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
+        stdev->is_hmd_proc_on = false;
+    }
+
+    ALOGD("-%s-", __func__);
+}
+
+static void remove_buffer(struct knowles_sound_trigger_device *stdev)
+{
+    ALOGD("+%s+", __func__);
+
+    if (!is_any_model_loaded(stdev) &&
+        stdev->is_buffer_package_loaded &&
+        !stdev->is_sensor_destroy_in_prog &&
+        !stdev->is_sensor_route_enabled) {
+        destroy_buffer_package(stdev->odsp_hdl);
+        stdev->is_buffer_package_loaded = false;
+    }
+
+    ALOGD("-%s-", __func__);
+}
+
+static void destroy_sensor_model(struct knowles_sound_trigger_device *stdev)
+{
+    int ret, i;
+    ALOGD("+%s+", __func__);
+
+    if (stdev->is_sensor_route_enabled == true) {
+        ret = set_sensor_route(stdev->route_hdl, false);
+        if (ret != 0) {
+            ALOGE("%s: tear Sensor route fail", __func__);
+        }
+        stdev->is_sensor_route_enabled = false;
+
+        ret = destroy_sensor_package(stdev->odsp_hdl);
+        if (ret != 0) {
+            ALOGE("%s: destroy Sensor package failed %d",
+                  __func__, ret);
+        }
+        stdev->current_enable = stdev->current_enable & ~OSLO_MASK;
+    }
+
+    // now we can change the flag
+    for (i = 0 ; i < MAX_MODELS ; i++) {
+        if (check_uuid_equality(stdev->models[i].uuid,
+                                stdev->sensor_model_uuid)) {
+            stdev->models[i].is_loaded = false;
+            break;
+        }
+    }
+
+    stdev->is_sensor_destroy_in_prog = false;
+    remove_buffer(stdev);
+    check_and_turn_off_hmd(stdev);
+
+    // There could be another thread waiting for us to destroy so signal that
+    // thread, if no one is waiting then this signal will have no effect
+    pthread_cond_signal(&stdev->sensor_create);
+
+    ALOGD("-%s-", __func__);
+}
+
+static void sensor_stop_timeout()
+{
+    ALOGD("+%s+", __func__);
+
+    struct knowles_sound_trigger_device *stdev = &g_stdev;
+    pthread_mutex_lock(&stdev->lock);
+    // We are here because we timed out so check if we still need to destroy
+    // the sensor package, if yes then go ahead otherwise do nothing
+    if (stdev->is_sensor_destroy_in_prog == true) {
+        destroy_sensor_model(stdev);
+    }
+    pthread_mutex_unlock(&stdev->lock);
+    ALOGD("-%s-", __func__);
+}
+
+static int start_sensor_model(struct knowles_sound_trigger_device * stdev)
+{
+    struct timespec ts;
+    int wait_counter = 0, err = 0;
+
+    while (stdev->is_sensor_destroy_in_prog == true &&
+           wait_counter < SENSOR_CREATE_WAIT_MAX_COUNT) {
+        // We wait for 1sec * MAX_COUNT times for the HOST 1 to respond, if
+        // within that time we don't get any response, we will go ahead with the
+        // sensor model creation. Note this might result in an error which would
+        // be better than blocking the thread indefinitely.
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += SENSOR_CREATE_WAIT_TIME_IN_S;
+        err = pthread_cond_timedwait(&stdev->sensor_create, &stdev->lock, &ts);
+        if (err == ETIMEDOUT) {
+            ALOGE("%s: WARNING: Sensor create timed out after %ds",
+                  __func__, SENSOR_CREATE_WAIT_TIME_IN_S);
+            wait_counter++;
+        }
+    }
+
+    // Reset timedout error
+    err = 0;
+
+    if (stdev->is_sensor_destroy_in_prog == true) {
+        ALOGE("%s: ERROR: Waited for %ds but we didn't get the event from "
+              "Host 1, forcing a destroy", __func__,
+              SENSOR_CREATE_WAIT_TIME_IN_S * SENSOR_CREATE_WAIT_MAX_COUNT);
+        stdev->is_sensor_destroy_in_prog = false;
+
+       if (stdev->is_sensor_route_enabled == true) {
+            err = set_sensor_route(stdev->route_hdl, false);
+            if (err) {
+                ALOGE("%s: Failed to tear sensor route", __func__);
+                goto exit;
+            }
+            err = destroy_sensor_package(stdev->odsp_hdl);
+            if (err) {
+                ALOGE("%s: ERROR: Failed to destroy sensor package", __func__);
+                goto exit;
+            }
+            stdev->is_sensor_route_enabled = false;
+        }
+    }
+
+    if(stdev->is_sensor_route_enabled == false) {
+        err = setup_sensor_package(stdev->odsp_hdl);
+        if (err) {
+            ALOGE("%s: Failed to setup sensor package", __func__);
+            goto exit;
+        }
+        // Don't download the keyword model file, just setup the
+        // sensor route
+        err = set_sensor_route(stdev->route_hdl, true);
+        if (err) {
+            ALOGE("%s: Sensor route fail", __func__);
+            goto exit;
+        }
+        stdev->is_sensor_route_enabled = true;
+        stdev->current_enable = stdev->current_enable | OSLO_MASK;
+    }
 
 exit:
     return err;
@@ -1116,6 +1687,24 @@ static void *callback_thread_loop(void *context)
                                 AMBIENT_KW_ID);
                             kwid = AMBIENT_KW_ID;
                             reset_ambient_plugin(stdev->odsp_hdl);
+                        } else if (ge.event_id == OSLO_EP_DISCONNECT) {
+                            ALOGD("Eventid received is OSLO_EP_DISCONNECT %d",
+                                  OSLO_EP_DISCONNECT);
+                            if (stdev->is_sensor_destroy_in_prog == true) {
+                                destroy_sensor_model(stdev);
+
+                                // A timer would have been created during stop,
+                                // check and delete it
+                                if (stdev->ss_timer_created) {
+                                    timer_delete(stdev->ss_timer);
+                                    stdev->ss_timer_created = false;
+                                }
+                            } else {
+                                ALOGE("Unexpected OSLO_EP_DISCONNECT received"
+                                      ", ignoring..");
+                            }
+
+                            break;
                         } else if (ge.event_id == ENTITY_KW_ID) {
                             ALOGD("Eventid received is ENTITY_KW_ID %d",
                                 ENTITY_KW_ID);
@@ -1329,8 +1918,8 @@ static int stop_recognition(struct knowles_sound_trigger_device *stdev,
         // This avoids any processing of chre/oslo.
         goto exit;
     }
-
-    if (model->is_active == false) {
+    if (can_update_recover_list(stdev) == true) {
+        update_recover_list(stdev, handle, false);
         goto exit;
     }
 
@@ -1452,6 +2041,15 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         stdev->is_buffer_package_loaded = true;
     }
 
+    if (stdev->is_src_package_loaded == false) {
+        ret = setup_src_package(stdev->odsp_hdl);
+        if (ret != 0) {
+            ALOGE("%s: ERROR: Failed to load the SRC package", __func__);
+            goto exit;
+        }
+        stdev->is_src_package_loaded = true;
+    }
+
     // Send the keyword model to the chip only for hotword and ambient audio
     if (check_uuid_equality(stdev->models[i].uuid,
                             stdev->hotword_model_uuid)) {
@@ -1468,25 +2066,16 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
     } else if (check_uuid_equality(stdev->models[i].uuid,
                                 stdev->sensor_model_uuid)) {
         // setup the sensor route
-        stdev->current_enable = stdev->current_enable | OSLO_MASK;
-        ret = setup_sensor_package(stdev->odsp_hdl);
-        if (ret != 0) {
-            ALOGE("%s: setup Sensor package failed", __func__);
-            goto exit;
-        }
-
-        ret = set_sensor_route(stdev->route_hdl, true);
-        if (ret != 0) {
-            ALOGE("%s: Sensor route fail", __func__);
+        ret = start_sensor_model(stdev);
+        if (ret) {
+            ALOGE("%s: ERROR: Failed to start sensor model", __func__);
             goto exit;
         }
         stdev->models[i].kw_id = USELESS_KW_ID;
     } else if (check_uuid_equality(stdev->models[i].uuid,
                                 stdev->chre_model_uuid)) {
-        if (hw_properties.concurrent_capture == false &&
-            stdev->is_media_recording == true) {
-            ALOGW("%s: device is recording, can't enable chre now", __func__);
-        } else {
+        // add chre to recover list
+        if (can_enable_chre(stdev)) {
             if (stdev->models[i].is_active == false) {
                 stdev->models[i].is_active = true;
                 handle_input_source(stdev, true);
@@ -1494,9 +2083,13 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
                 set_package_route(stdev, stdev->models[i].uuid,
                                 stdev->is_bargein_route_enabled);
             }
+        } else {
+            ALOGW("%s: device is recording / in call, can't enable chre now",
+                  __func__);
+            if (can_update_recover_list(stdev) == true)
+                update_recover_list(stdev, i, true);
         }
         stdev->models[i].kw_id = USELESS_KW_ID;
-        stdev->is_chre_enable = true;
     } else {
         ALOGE("%s: ERROR: unknown keyword model file", __func__);
         ret = -EINVAL;
@@ -1516,7 +2109,10 @@ exit:
             destroy_buffer_package(stdev->odsp_hdl);
             stdev->is_buffer_package_loaded = false;
         }
-
+        if (!is_any_model_loaded(stdev) && stdev->is_src_package_loaded) {
+            destory_src_package(stdev->odsp_hdl);
+            stdev->is_src_package_loaded = false;
+        }
         if (!is_any_model_loaded(stdev) && stdev->is_hmd_proc_on) {
             power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
             stdev->is_hmd_proc_on = false;
@@ -1556,22 +2152,53 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
             goto exit;
     }
 
-
     if (check_uuid_equality(stdev->models[handle].uuid,
                                 stdev->sensor_model_uuid)) {
-        // Disable the sensor route
-        ret = set_sensor_route(stdev->route_hdl, false);
-        if (ret != 0) {
-            ALOGE("%s: disable Sensor route failed", __func__);
-        }
+        // Inform the Host 1 that sensor route/packages are about to be
+        // torndown and then wait for confirmation from Host 1 that it can be
+        // torndown. Also start a timer for 5 seconds, if the Host 1 doesn't
+        // send us the event within 5 seconds we force remove the sensor pkgs
+        if (stdev->is_sensor_route_enabled == true) {
+            struct itimerspec ss_timer_spec;
+            struct sigevent ss_sigevent;
 
-        ret = destroy_sensor_package(stdev->odsp_hdl);
-        if (ret != 0) {
-            ALOGE("%s: destroy Sensor package failed", __func__);
+            // Inform the host 1
+            stdev->is_sensor_destroy_in_prog = true;
+            trigger_sensor_destroy_event(stdev->odsp_hdl);
+
+            // Start timer for 5 seconds
+            ss_sigevent.sigev_notify = SIGEV_THREAD;
+            ss_sigevent.sigev_notify_function = sensor_stop_timeout;
+            ss_sigevent.sigev_notify_attributes = NULL;
+
+            ss_timer_spec.it_interval.tv_sec = 0;
+            ss_timer_spec.it_interval.tv_nsec = 0;
+            ss_timer_spec.it_value.tv_sec =
+                    SENSOR_CREATE_WAIT_TIME_IN_S * SENSOR_CREATE_WAIT_MAX_COUNT;
+            ss_timer_spec.it_value.tv_nsec = 0;
+
+            if (stdev->ss_timer_created) {
+                timer_delete(stdev->ss_timer);
+                stdev->ss_timer_created = false;
+            }
+
+            if (timer_create(CLOCK_REALTIME,
+                             &ss_sigevent, &stdev->ss_timer) == -1) {
+                ALOGE("%s: Timer Create Failed", __func__);
+            } else {
+                stdev->ss_timer_created = true;
+                if (timer_settime(stdev->ss_timer,
+                                  0, &ss_timer_spec, NULL) == -1) {
+                    ALOGE("%s: Timer Set Failed", __func__);
+                }
+            }
         }
-        stdev->current_enable = stdev->current_enable & ~OSLO_MASK;
     } else if (check_uuid_equality(stdev->models[handle].uuid,
                                 stdev->chre_model_uuid)) {
+        // remove chre from recover list
+        if (can_update_recover_list(stdev) == true)
+            update_recover_list(stdev, handle, false);
+
         if (stdev->models[handle].is_active == true) {
             stdev->models[handle].is_active = false;
             tear_package_route(stdev, stdev->models[handle].uuid,
@@ -1579,12 +2206,16 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
             destroy_package(stdev, &stdev->models[handle]);
             handle_input_source(stdev, false);
         }
-        stdev->is_chre_enable = false;
     }
 
     stdev->models[handle].sound_model_callback = NULL;
     stdev->models[handle].sound_model_cookie = NULL;
-    stdev->models[handle].is_loaded = false;
+
+    if (!(check_uuid_equality(stdev->models[handle].uuid,
+                                stdev->sensor_model_uuid) &&
+            stdev->is_sensor_destroy_in_prog))
+        stdev->models[handle].is_loaded = false;
+
     if (stdev->models[handle].data) {
         free(stdev->models[handle].data);
         stdev->models[handle].data = NULL;
@@ -1594,7 +2225,11 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
     if (!is_any_model_loaded(stdev) && stdev->is_buffer_package_loaded) {
         destroy_buffer_package(stdev->odsp_hdl);
         stdev->is_buffer_package_loaded = false;
+    }
 
+    if (!is_any_model_loaded(stdev) && stdev->is_src_package_loaded) {
+        destory_src_package(stdev->odsp_hdl);
+        stdev->is_src_package_loaded = false;
     }
 
     if (!is_any_model_loaded(stdev) && stdev->is_hmd_proc_on) {
@@ -1675,6 +2310,13 @@ static int stdev_start_recognition(
         // configs and cookie
         goto exit;
     }
+    if (can_update_recover_list(stdev) == true) {
+        // Device is in voice/VoIP call, add model to recover list first
+        // recover model once voice/VoIP is ended.
+        update_recover_list(stdev, handle, true);
+        goto exit;
+    }
+
     model->is_active = true;
 
     handle_input_source(stdev, true);
@@ -1845,6 +2487,11 @@ static int stdev_close(hw_device_t *device)
     if (stdev->odsp_hdl)
         iaxxx_odsp_deinit(stdev->odsp_hdl);
 
+    if (stdev->ss_timer_created) {
+        timer_delete(stdev->ss_timer);
+        stdev->ss_timer_created = false;
+    }
+
 exit:
     pthread_mutex_unlock(&stdev->lock);
     ALOGD("-%s-", __func__);
@@ -1878,7 +2525,9 @@ static int open_streaming_lib(struct knowles_sound_trigger_device *stdev) {
         } else {
             ALOGV("%s: DLOPEN successful for %s",
                 __func__, ADNC_STRM_LIBRARY_PATH);
-            stdev->adnc_strm_handle = 0;
+            for (int index = 0; index < MAX_MODELS; index++) {
+                stdev->adnc_strm_handle[index] = 0;
+            }
             stdev->adnc_strm_open =
                 (int (*)(bool, int, int))dlsym(stdev->adnc_cvq_strm_lib,
                 "adnc_strm_open");
@@ -2133,16 +2782,24 @@ static int stdev_open(const hw_module_t *module, const char *name,
     }
 
     stdev->is_mic_route_enabled = false;
+    stdev->is_con_mic_route_enabled = false;
+    stdev->is_in_voice_voip_mode = false;
+    stdev->is_voice_voip_stop = false;
     stdev->is_music_playing = false;
     stdev->is_bargein_route_enabled = false;
     stdev->is_buffer_package_loaded = false;
     stdev->hotword_buffer_enable = 0;
     stdev->music_buffer_enable = 0;
     stdev->current_enable = 0;
+    stdev->is_sensor_route_enabled = false;
+    stdev->recover_model_list = 0;
     stdev->is_hmd_proc_on = false;
     stdev->is_dmx_proc_on = false;
-    stdev->is_chre_enable = false;
     stdev->is_media_recording = false;
+    stdev->is_concurrent_capture = hw_properties.concurrent_capture;
+
+    stdev->is_sensor_destroy_in_prog = false;
+    stdev->ss_timer_created = false;
 
     stdev->snd_crd_num = snd_card_num;
     stdev->fw_reset_done_by_hal = false;
@@ -2199,7 +2856,10 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
 {
     int ret = 0;
     int i = 0;
+    int index = -1;
     struct knowles_sound_trigger_device *stdev = &g_stdev;
+    enum sthal_mode pre_mode, cur_mode;
+
     if (!stdev)
         return -ENODEV;
 
@@ -2218,59 +2878,106 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
 
     switch (event) {
     case AUDIO_EVENT_CAPTURE_DEVICE_INACTIVE:
-        if (stdev->is_chre_enable == true) {
-            for (i = 0; i < MAX_MODELS; i++) {
-                if (check_uuid_equality(stdev->models[i].uuid,
-                                        stdev->chre_model_uuid)) {
-                    if (stdev->models[i].is_active == false) {
-                        stdev->models[i].is_active = true;
-                        handle_input_source(stdev, true);
-                        setup_package(stdev, &stdev->models[i]);
-                        set_package_route(stdev, stdev->models[i].uuid,
-                                        stdev->is_bargein_route_enabled);
-                    }
-                }
-            }
+
+        ALOGD("%s: handle capture device inactive event %d", __func__, event);
+
+        // get previous mode
+        pre_mode = get_sthal_mode(stdev);
+
+        // update conditions
+        if (stdev->is_voice_voip_stop == true) {
+            ALOGD("%s: voice/voip device is inactive",
+                  __func__);
+            stdev->is_in_voice_voip_mode = false;
+            stdev->is_voice_voip_stop = false;
         }
-        stdev->is_media_recording = false;
+        if (stdev->is_concurrent_capture == true &&
+            stdev->is_in_voice_voip_mode == false) {
+            if (stdev->is_media_recording == true)
+                stdev->is_con_mic_route_enabled = true;
+            else
+                stdev->is_con_mic_route_enabled = false;
+            ALOGD("%s: update mic con %d", __func__, stdev->is_con_mic_route_enabled);
+        }
+
+        cur_mode = get_sthal_mode(stdev);
+
+        do_handle_functions(stdev, pre_mode, cur_mode,
+                            AUDIO_EVENT_CAPTURE_DEVICE_INACTIVE);
+
+        break;
     case AUDIO_EVENT_CAPTURE_STREAM_INACTIVE:
         /*
          * [TODO] handle capture device on/off event
          * There might be concurrency devices usecase.
          *
          */
-        ALOGD("%s: handle capture inactive event %d", __func__, event);
-        break;
-    case AUDIO_EVENT_CAPTURE_DEVICE_ACTIVE:
-        stdev->is_media_recording = true;
-    case AUDIO_EVENT_CAPTURE_STREAM_ACTIVE:
-        /*
-         * Handle capture active event
-         * That stop all recognition in codec
-         */
-        ALOGD("%s: handle capture active event %d", __func__, event);
+        ALOGD("%s: handle capture stream inactive event %d, usecase %d",
+              __func__, event, config->u.usecase.type);
 
-        for (i = 0; i < MAX_MODELS; i++) {
-            if (stdev->models[i].is_active == true) {
-                tear_package_route(stdev, stdev->models[i].uuid,
-                                stdev->is_bargein_route_enabled);
-                stdev->models[i].is_active = false;
-                destroy_package(stdev, &stdev->models[i]);
-                if ((stdev->hotword_buffer_enable) &&
-                    !(stdev->current_enable & PLUGIN1_MASK))
-                    tear_hotword_buffer_route(stdev->route_hdl,
-                                            stdev->is_bargein_route_enabled);
+        // update conditions
+        if ((config->u.usecase.type == USECASE_TYPE_VOICE_CALL ||
+            config->u.usecase.type == USECASE_TYPE_VOIP_CALL))
+            stdev->is_voice_voip_stop = true;
+        else if (config->u.usecase.type == USECASE_TYPE_PCM_CAPTURE)
+            stdev->is_media_recording = false;
 
-                if ((stdev->music_buffer_enable) &&
-                    !(stdev->current_enable & PLUGIN2_MASK))
-                    tear_music_buffer_route(stdev->route_hdl,
-                                            stdev->is_bargein_route_enabled);
-
-                setup_buffer(stdev, &stdev->models[i], false);
+        // turn off amp-ref with 48khz before turning off main mic by media recording
+        if (is_mic_controlled_by_audhal(stdev) == true &&
+            stdev->is_bargein_route_enabled == true) {
+            ret = enable_amp_ref_route(stdev->route_hdl, false, STRM_48K);
+            if (ret != 0) {
+                ALOGE("Failed to disable amp-ref route");
+                goto exit;
             }
         }
+        break;
+    case AUDIO_EVENT_CAPTURE_DEVICE_ACTIVE:
+        /*
+         * Handle capture device active event
+         */
+        ALOGD("%s: handle capture device active event %d", __func__, event);
 
-        handle_input_source(stdev, false);
+        pre_mode = get_sthal_mode(stdev);
+
+        // update conditions
+        if (stdev->is_in_voice_voip_mode == false &&
+                (config->u.usecase.type == USECASE_TYPE_VOICE_CALL ||
+                 config->u.usecase.type == USECASE_TYPE_VOIP_CALL)) {
+            ALOGD("%s: voice/voip is actvie, close ST mic and don't use mic concurrently",
+                  __func__);
+            stdev->is_in_voice_voip_mode = true;
+        }
+        if (config->u.usecase.type == USECASE_TYPE_PCM_CAPTURE ) {
+            stdev->is_media_recording = true;
+        }
+        if (stdev->is_concurrent_capture == true &&
+            stdev->is_in_voice_voip_mode == false &&
+            stdev->is_con_mic_route_enabled == false &&
+            config->device_info.device == ST_DEVICE_HANDSET_MIC) {
+            ALOGD("%s: enable mic concurrency", __func__);
+                stdev->is_con_mic_route_enabled = true;
+        }
+
+        cur_mode = get_sthal_mode(stdev);
+
+        do_handle_functions(stdev, pre_mode, cur_mode,
+                            AUDIO_EVENT_CAPTURE_DEVICE_ACTIVE);
+
+        break;
+    case AUDIO_EVENT_CAPTURE_STREAM_ACTIVE:
+        ALOGD("%s: handle capture stream active event %d, usecase :%d",
+              __func__, event, config->u.usecase.type);
+
+        // turn on amp-ref with 48khz after turning on main mic by media recording
+        if (is_mic_controlled_by_audhal(stdev) == true &&
+            stdev->is_bargein_route_enabled == true) {
+            ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_48K);
+            if (ret != 0) {
+                ALOGE("Failed to enable amp-ref route");
+                goto exit;
+            }
+        }
         break;
     case AUDIO_EVENT_PLAYBACK_STREAM_INACTIVE:
         ALOGD("%s: handle playback stream inactive", __func__);
@@ -2350,17 +3057,43 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                         goto exit;
                     }
 
-                    ret = enable_mic_route(stdev->route_hdl, false,
-                                        EXTERNAL_OSCILLATOR);
+                    ret = enable_src_route(stdev->route_hdl, false, SRC_AMP_REF);
                     if (ret != 0) {
-                        ALOGE("Failed to disable mic route with INT OSC");
+                        ALOGE("Failed to disable SRC-amp route");
                         goto exit;
                     }
-                    ret = enable_mic_route(stdev->route_hdl, true,
-                                        INTERNAL_OSCILLATOR);
+
+                    ret = destroy_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
                     if (ret != 0) {
-                        ALOGE("Failed to enable mic route with EXT OSC");
+                        ALOGE("Failed to unload SRC-amp package");
                         goto exit;
+                    }
+
+                    if (is_mic_controlled_by_audhal(stdev) == false) {
+                        ret = enable_amp_ref_route(stdev->route_hdl, false, STRM_16K);
+                        if (ret != 0) {
+                            ALOGE("Failed to disable amp-ref route");
+                            goto exit;
+                        }
+                        ret = enable_mic_route(stdev->route_hdl, false,
+                                            EXTERNAL_OSCILLATOR);
+                        if (ret != 0) {
+                            ALOGE("Failed to disable mic route with INT OSC");
+                            goto exit;
+                        }
+                        ret = enable_mic_route(stdev->route_hdl, true,
+                                            INTERNAL_OSCILLATOR);
+                        if (ret != 0) {
+                            ALOGE("Failed to enable mic route with EXT OSC");
+                            goto exit;
+                        }
+                    } else {
+                        // main mic is turned by media record, close it by 48khz
+                        ret = enable_amp_ref_route(stdev->route_hdl, false, STRM_48K);
+                        if (ret != 0) {
+                            ALOGE("Failed to disable amp-ref route");
+                            goto exit;
+                        }
                     }
                 }
             }
@@ -2383,24 +3116,48 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                 // Check each model, if it is active then update it's route
                 if (stdev->is_bargein_route_enabled != true) {
                     ALOGD("Bargein enable");
-                    ret = enable_mic_route(stdev->route_hdl, false,
-                                        INTERNAL_OSCILLATOR);
+                    if (is_mic_controlled_by_audhal(stdev) == false) {
+                        ret = enable_mic_route(stdev->route_hdl, false,
+                                            INTERNAL_OSCILLATOR);
+                        if (ret != 0) {
+                            ALOGE("Failed to disable mic route with INT OSC");
+                            goto exit;
+                        }
+                        ret = enable_mic_route(stdev->route_hdl, true,
+                                            EXTERNAL_OSCILLATOR);
+                        if (ret != 0) {
+                            ALOGE("Failed to enable mic route with EXT OSC");
+                            goto exit;
+                        }
+                        ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_16K);
+                        if (ret != 0) {
+                            ALOGE("Failed to enable amp-ref route");
+                            goto exit;
+                        }
+                    } else {
+                        // main mic is turned by media recording
+                        ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_48K);
+                        if (ret != 0) {
+                            ALOGE("Failed to enable amp-ref route");
+                            goto exit;
+                        }
+                    }
+                    ret = setup_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
                     if (ret != 0) {
-                        ALOGE("Failed to disable mic route with INT OSC");
+                        ALOGE("Failed to load SRC-amp package");
                         goto exit;
                     }
-                    ret = enable_mic_route(stdev->route_hdl, true,
-                                        EXTERNAL_OSCILLATOR);
+                    ret = enable_src_route(stdev->route_hdl, true, SRC_AMP_REF);
                     if (ret != 0) {
-                        ALOGE("Failed to enable mic route with EXT OSC");
+                        ALOGE("Failed to enable SRC-amp route");
                         goto exit;
                     }
+
                     ret = setup_aec_package(stdev->odsp_hdl);
                     if (ret != 0) {
                         ALOGE("Failed to load AEC package");
                         goto exit;
                     }
-
                     ret = enable_bargein_route(stdev->route_hdl, true);
                     if (ret != 0) {
                         ALOGE("Failed to enable buffer route");
@@ -2467,11 +3224,41 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         break;
     case AUDIO_EVENT_STOP_LAB:
         /* Close Stream Driver */
-        ALOGD("%s: close streaming %d", __func__, event);
-        if (stdev->adnc_strm_handle) {
-            stdev->adnc_strm_close(stdev->adnc_strm_handle);
-            stdev->adnc_strm_handle = 0;
-            stdev->is_streaming = 0;
+        for (i = 0; i < MAX_MODELS; i++) {
+            if (stdev->models[i].is_active &&
+                (stdev->models[i].config->capture_handle ==
+                 config->u.ses_info.capture_handle)) {
+                index = i;
+                break;
+            }
+        }
+
+        /*
+         * Close unused adnc if ...
+         * 1. No capture handle is found
+         * 2. Model is inactive
+         * 3. adnc stream handle is existed
+         */
+        if (index == -1 && stdev->is_streaming > 0) {
+            ALOGD("%s: close unused adnc handle, cap_handle:%d", __func__,
+                  config->u.ses_info.capture_handle);
+            for (i = 0; i < MAX_MODELS; i++) {
+                if (stdev->adnc_strm_handle[i] != 0 &&
+                    !stdev->models[i].is_active) {
+                    stdev->adnc_strm_close(stdev->adnc_strm_handle[i]);
+                    stdev->adnc_strm_handle[i] = 0;
+                    stdev->is_streaming--;
+                }
+            }
+            goto exit;
+        }
+
+        ALOGD("%s: close streaming %d, cap_handle:%d",
+              __func__, event, config->u.ses_info.capture_handle);
+        if (stdev->adnc_strm_handle[index]) {
+            stdev->adnc_strm_close(stdev->adnc_strm_handle[index]);
+            stdev->adnc_strm_handle[index] = 0;
+            stdev->is_streaming--;
         }
 
         break;
@@ -2482,8 +3269,24 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         break;
 
     case AUDIO_EVENT_READ_SAMPLES:
+        /* It is possible to change session info, check config */
+        if (config->u.aud_info.ses_info == NULL) {
+            ALOGE("%s: Invalid config, event:%d", __func__, event);
+            ret = -EINVAL;
+            goto exit;
+        }
+
+        for (i = 0; i < MAX_MODELS; i++) {
+            if (stdev->models[i].is_active &&
+                (stdev->models[i].config->capture_handle ==
+                 config->u.aud_info.ses_info->capture_handle)) {
+                index = i;
+                break;
+            }
+        }
+
         /* Open Stream Driver */
-        if (stdev->is_streaming == false) {
+        if (index != -1 && stdev->adnc_strm_handle[index] == 0) {
             if (stdev->adnc_strm_open == NULL) {
                 ALOGE("%s: Error adnc streaming not supported", __func__);
             } else {
@@ -2501,23 +3304,26 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                         stream_end_point = CVQ_ENDPOINT;
                         break;
                 };
-                stdev->adnc_strm_handle = stdev->adnc_strm_open(
+                stdev->adnc_strm_handle[index] = stdev->adnc_strm_open(
                                             keyword_stripping_enabled, 0,
                                             stream_end_point);
-                if (stdev->adnc_strm_handle) {
-                    ALOGD("Successfully opened adnc streaming");
-                    stdev->is_streaming = true;
+                if (stdev->adnc_strm_handle[index]) {
+                    ALOGD("Successfully opened adnc strm! index %d handle %d",
+                          index, config->u.aud_info.ses_info->capture_handle);
+                    stdev->is_streaming++;
                 } else {
                     ALOGE("%s: DSP is currently not streaming", __func__);
                 }
             }
         }
-        /* Read pcm data from tunnel */
-        if (stdev->is_streaming == true) {
+
+        if (index != -1 && stdev->adnc_strm_handle[index] != 0) {
             //ALOGD("%s: soundtrigger HAL adnc_strm_read", __func__);
-            stdev->adnc_strm_read(stdev->adnc_strm_handle,
+            pthread_mutex_unlock(&stdev->lock);
+            stdev->adnc_strm_read(stdev->adnc_strm_handle[index],
                                 config->u.aud_info.buf,
                                 config->u.aud_info.num_bytes);
+            pthread_mutex_lock(&stdev->lock);
         } else {
             ALOGE("%s: soundtrigger is not streaming", __func__);
         }
