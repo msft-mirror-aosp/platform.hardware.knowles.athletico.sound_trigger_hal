@@ -1061,6 +1061,16 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
             (pre_mode == CON_ENABLED_CAPTURE_ST && cur_mode == IN_CALL) ||
             (pre_mode == CON_ENABLED_ST && cur_mode == IN_CALL)) {
             // disable all ST
+            // if tunnel is active, close it first
+            for (i = 0; i < MAX_MODELS; i++) {
+                if (stdev->adnc_strm_handle[i] != 0) {
+                    ALOGD("%s: stop tunnling for index:%d", __func__, i);
+                    stdev->adnc_strm_close(stdev->adnc_strm_handle[i]);
+                    stdev->adnc_strm_handle[i] = 0;
+                }
+            }
+            stdev->is_streaming = 0;
+
             for (i = 0; i < MAX_MODELS; i++) {
                 if (stdev->models[i].is_active == true) {
                     update_recover_list(stdev, i, true);
@@ -1920,6 +1930,7 @@ static int stop_recognition(struct knowles_sound_trigger_device *stdev,
     }
     if (can_update_recover_list(stdev) == true) {
         update_recover_list(stdev, handle, false);
+        status = -EAGAIN;
         goto exit;
     }
 
@@ -2314,6 +2325,7 @@ static int stdev_start_recognition(
         // Device is in voice/VoIP call, add model to recover list first
         // recover model once voice/VoIP is ended.
         update_recover_list(stdev, handle, true);
+        status = -EAGAIN;
         goto exit;
     }
 
@@ -3226,6 +3238,7 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         /* Close Stream Driver */
         for (i = 0; i < MAX_MODELS; i++) {
             if (stdev->models[i].is_active &&
+                stdev->models[i].config &&
                 (stdev->models[i].config->capture_handle ==
                  config->u.ses_info.capture_handle)) {
                 index = i;
@@ -3253,9 +3266,9 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
             goto exit;
         }
 
-        ALOGD("%s: close streaming %d, cap_handle:%d",
-              __func__, event, config->u.ses_info.capture_handle);
-        if (stdev->adnc_strm_handle[index]) {
+        ALOGD("%s: close streaming %d, cap_handle:%d, index:%d",
+              __func__, event, config->u.ses_info.capture_handle, index);
+        if (index != -1 && stdev->adnc_strm_handle[index] != 0) {
             stdev->adnc_strm_close(stdev->adnc_strm_handle[index]);
             stdev->adnc_strm_handle[index] = 0;
             stdev->is_streaming--;
@@ -3278,6 +3291,7 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
 
         for (i = 0; i < MAX_MODELS; i++) {
             if (stdev->models[i].is_active &&
+                stdev->models[i].config &&
                 (stdev->models[i].config->capture_handle ==
                  config->u.aud_info.ses_info->capture_handle)) {
                 index = i;
