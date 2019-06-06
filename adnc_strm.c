@@ -81,6 +81,8 @@ struct adnc_strm_device
 #ifdef DUMP_UNPARSED_OUTPUT
     FILE *dump_file;
 #endif
+
+    pthread_mutex_t lock;
 };
 
 static void kst_split_aft(uint32_t *pAfloat, int32_t *exp,
@@ -299,6 +301,8 @@ size_t adnc_strm_read(long handle, void *buffer, size_t bytes)
         goto exit;
     }
 
+    pthread_mutex_lock(&adnc_strm_dev->lock);
+
     if (bytes > adnc_strm_dev->pcm_avail_size) {
         /*
          * We don't have enough PCM data, read more from the device.
@@ -328,6 +332,7 @@ read_again:
         if (bytes_read <= 0) {
             ALOGE("Failed to read data from tunnel");
             ret = 0; // TODO should we try to read a couple of times?
+            pthread_mutex_unlock(&adnc_strm_dev->lock);
             goto exit;
         }
 
@@ -398,7 +403,10 @@ read_again:
     adnc_strm_dev->pcm_avail_size -= bytes;
     adnc_strm_dev->pcm_read_offset += bytes;
 
+    pthread_mutex_unlock(&adnc_strm_dev->lock);
+
 exit:
+
     return bytes;
 }
 
@@ -412,12 +420,16 @@ long adnc_strm_open(bool enable_stripping,
     struct adnc_strm_device *adnc_strm_dev = NULL;
 
     adnc_strm_dev = (struct adnc_strm_device *)
-                        malloc(sizeof(struct adnc_strm_device));
+                        calloc(1, sizeof(struct adnc_strm_device));
     if (adnc_strm_dev == NULL) {
         ALOGE("Failed to allocate memory for adnc_strm_dev");
         ret = 0;
-        goto exit_on_error;
+        goto exit_no_memory;
     }
+
+    pthread_mutex_init(&adnc_strm_dev->lock, (const pthread_mutexattr_t *) NULL);
+
+    pthread_mutex_lock(&adnc_strm_dev->lock);
 
     adnc_strm_dev->end_point = stream_end_point;
     adnc_strm_dev->idx = 0;
@@ -466,6 +478,8 @@ long adnc_strm_open(bool enable_stripping,
         goto exit_on_error;
     }
 
+    pthread_mutex_unlock(&adnc_strm_dev->lock);
+
     return (long)adnc_strm_dev;
 
 exit_on_error:
@@ -490,9 +504,13 @@ exit_on_error:
         ALOGE("Failed to stop tunneling");
     }
 
+    pthread_mutex_unlock(&adnc_strm_dev->lock);
+
     if (adnc_strm_dev) {
         free(adnc_strm_dev);
     }
+
+exit_no_memory:
 
     return ret;
 }
@@ -508,6 +526,8 @@ int adnc_strm_close(long handle)
         ret = -1;
         goto exit;
     }
+
+    pthread_mutex_lock(&adnc_strm_dev->lock);
 
     if (adnc_strm_dev->pcm_buf) {
         free(adnc_strm_dev->pcm_buf);
@@ -529,6 +549,8 @@ int adnc_strm_close(long handle)
     if (ret != 0) {
         ALOGE("Failed to stop tunneling");
     }
+
+    pthread_mutex_unlock(&adnc_strm_dev->lock);
 
     if (adnc_strm_dev) {
         free(adnc_strm_dev);

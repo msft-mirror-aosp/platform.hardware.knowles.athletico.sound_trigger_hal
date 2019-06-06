@@ -163,8 +163,10 @@ static bool frame_data_validate(const uint8_t *data, size_t frame_size) {
 
 static int show_help() {
     fprintf(stdout,
-            "usage: oslo_data_injection_test <file_name> <frame_period_ms> <frame_size>\n");
-
+            "usage: oslo_data_injection_test <file_name> <frame_period_ms> <frame_size> [-s n] [-c n]\n"
+            "\n"
+            "-s n  Skip n input frames\n"
+            "-c n  Inject only n input frames\n");
     exit(EXIT_FAILURE);
 }
 
@@ -186,6 +188,13 @@ int main(int argc, char *argv[]) {
     struct stat file_stat;
     uint32_t file_size;
     uint32_t inject_bytes_per_sec;
+    uint32_t skip_frames = 0;
+    uint32_t max_inject_frames = UINT32_MAX;
+    int c;
+
+    const struct option long_options[] = {{"skip", required_argument, NULL, 's'},
+                                          {"count", required_argument, NULL, 'c'},
+                                          {NULL, 0, NULL, 0}};
 
     if (argc < 4) {
         show_help();
@@ -193,6 +202,28 @@ int main(int argc, char *argv[]) {
         file_path = argv[1];
         frame_period_ms = strtol(argv[2], NULL, 0);
         frame_size = strtol(argv[3], NULL, 0);
+    }
+
+    while ((c = getopt_long(argc, argv, "s:c:", long_options, NULL)) != -1) {
+        switch (c) {
+            case 's':
+                if (NULL == optarg) {
+                    show_help();
+                } else {
+                    skip_frames = strtoul(optarg, NULL, 0);
+                }
+                break;
+            case 'c':
+                if (NULL == optarg) {
+                    show_help();
+                } else {
+                    max_inject_frames = strtoul(optarg, NULL, 0);
+                }
+                break;
+            default:
+                show_help();
+                break;
+        }
     }
 
     if (frame_period_ms < 0 || frame_period_ms > FRAME_PERIOD_MS_MAX) {
@@ -253,6 +284,15 @@ int main(int argc, char *argv[]) {
             fprintf(stdout, "Drop invalid frame, header: %04x, %04x, %04x, %04x, %04x, %04x\n",
                     header[0], header[1], header[2], header[3], header[4], header[5]);
             continue;
+        }
+        if (skip_frames > 0) {
+            ALOGD("Num of frames to skip %u\n", skip_frames);
+            skip_frames--;
+            continue;
+        }
+        if (frames_injected >= max_inject_frames) {
+            ALOGD("Already injected %u frames, STOP\n", frames_injected);
+            break;
         }
         data_ptr = frame_data_buf;
         while (frame_data_bytes_remaining) {
