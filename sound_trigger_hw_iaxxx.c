@@ -155,8 +155,6 @@ struct knowles_sound_trigger_device {
     bool is_sensor_route_enabled;
     bool is_src_package_loaded;
     bool is_st_hal_ready;
-    bool is_hmd_proc_on;
-    bool is_dmx_proc_on;
     int hotword_buffer_enable;
     int music_buffer_enable;
     bool is_sensor_destroy_in_prog;
@@ -1061,6 +1059,16 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
             (pre_mode == CON_ENABLED_CAPTURE_ST && cur_mode == IN_CALL) ||
             (pre_mode == CON_ENABLED_ST && cur_mode == IN_CALL)) {
             // disable all ST
+            // if tunnel is active, close it first
+            for (i = 0; i < MAX_MODELS; i++) {
+                if (stdev->adnc_strm_handle[i] != 0) {
+                    ALOGD("%s: stop tunnling for index:%d", __func__, i);
+                    stdev->adnc_strm_close(stdev->adnc_strm_handle[i]);
+                    stdev->adnc_strm_handle[i] = 0;
+                }
+            }
+            stdev->is_streaming = 0;
+
             for (i = 0; i < MAX_MODELS; i++) {
                 if (stdev->models[i].is_active == true) {
                     update_recover_list(stdev, i, true);
@@ -1204,11 +1212,6 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
     stdev->current_enable = 0;
     stdev->hotword_buffer_enable = 0;
     stdev->music_buffer_enable = 0;
-
-    if (stdev->is_hmd_proc_on == true) {
-        power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
-        power_on_proc_mem(stdev->route_hdl, true, IAXXX_HMD_ID);
-    }
 
     if (stdev->is_music_playing == true &&
         stdev->is_bargein_route_enabled == true) {
@@ -1403,7 +1406,7 @@ static int crash_recovery(struct knowles_sound_trigger_device *stdev)
     int err = 0;
 
     set_default_apll_clk(stdev->mixer);
-    power_down_all_non_ctrl_proc_mem(stdev->mixer);
+
     // Redownload the keyword model files and start recognition
     err = restart_recognition(stdev);
     if (err != 0) {
@@ -1417,19 +1420,6 @@ static int crash_recovery(struct knowles_sound_trigger_device *stdev)
 
 exit:
     return err;
-}
-
-static void check_and_turn_off_hmd(struct knowles_sound_trigger_device *stdev)
-{
-    ALOGD("+%s+", __func__);
-
-    // Switch the processor off only if all packages are unloaded
-    if (!is_any_model_loaded(stdev) && stdev->is_hmd_proc_on) {
-        power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
-        stdev->is_hmd_proc_on = false;
-    }
-
-    ALOGD("-%s-", __func__);
 }
 
 static void remove_buffer(struct knowles_sound_trigger_device *stdev)
@@ -1478,7 +1468,6 @@ static void destroy_sensor_model(struct knowles_sound_trigger_device *stdev)
 
     stdev->is_sensor_destroy_in_prog = false;
     remove_buffer(stdev);
-    check_and_turn_off_hmd(stdev);
 
     // There could be another thread waiting for us to destroy so signal that
     // thread, if no one is waiting then this signal will have no effect
@@ -1650,7 +1639,6 @@ static void *callback_thread_loop(void *context)
         }
 
         set_default_apll_clk(stdev->mixer);
-        power_down_all_non_ctrl_proc_mem(stdev->mixer);
 
         stdev->is_st_hal_ready = true;
     }
@@ -1749,7 +1737,6 @@ static void *callback_thread_loop(void *context)
                     ALOGD("Firmware downloaded successfully");
                     stdev->is_st_hal_ready = true;
                     set_default_apll_clk(stdev->mixer);
-                    power_down_all_non_ctrl_proc_mem(stdev->mixer);
                 } else if (strstr(msg + i, IAXXX_FW_CRASH_EVENT_STR)) {
                     ALOGD("Firmware has crashed");
                     // Don't allow any op on ST HAL until recovery is complete
@@ -1920,6 +1907,7 @@ static int stop_recognition(struct knowles_sound_trigger_device *stdev,
     }
     if (can_update_recover_list(stdev) == true) {
         update_recover_list(stdev, handle, false);
+        status = -EAGAIN;
         goto exit;
     }
 
@@ -2027,11 +2015,6 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         stdev->models[i].data_sz = kw_model_sz;
     }
 
-    if (stdev->is_hmd_proc_on == false) {
-        power_on_proc_mem(stdev->route_hdl, true, IAXXX_HMD_ID);
-        stdev->is_hmd_proc_on = true;
-    }
-
     if (stdev->is_buffer_package_loaded == false) {
         ret = setup_buffer_package(stdev->odsp_hdl);
         if (ret != 0) {
@@ -2112,10 +2095,6 @@ exit:
         if (!is_any_model_loaded(stdev) && stdev->is_src_package_loaded) {
             destory_src_package(stdev->odsp_hdl);
             stdev->is_src_package_loaded = false;
-        }
-        if (!is_any_model_loaded(stdev) && stdev->is_hmd_proc_on) {
-            power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
-            stdev->is_hmd_proc_on = false;
         }
     }
     pthread_mutex_unlock(&stdev->lock);
@@ -2232,11 +2211,6 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
         stdev->is_src_package_loaded = false;
     }
 
-    if (!is_any_model_loaded(stdev) && stdev->is_hmd_proc_on) {
-            power_on_proc_mem(stdev->route_hdl, false, IAXXX_HMD_ID);
-            stdev->is_hmd_proc_on = false;
-    }
-
     ALOGD("%s: Successfully unloaded the model, handle - %d",
         __func__, handle);
 exit:
@@ -2314,6 +2288,7 @@ static int stdev_start_recognition(
         // Device is in voice/VoIP call, add model to recover list first
         // recover model once voice/VoIP is ended.
         update_recover_list(stdev, handle, true);
+        status = -EAGAIN;
         goto exit;
     }
 
@@ -2793,8 +2768,6 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->current_enable = 0;
     stdev->is_sensor_route_enabled = false;
     stdev->recover_model_list = 0;
-    stdev->is_hmd_proc_on = false;
-    stdev->is_dmx_proc_on = false;
     stdev->is_media_recording = false;
     stdev->is_concurrent_capture = hw_properties.concurrent_capture;
 
@@ -3226,6 +3199,7 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         /* Close Stream Driver */
         for (i = 0; i < MAX_MODELS; i++) {
             if (stdev->models[i].is_active &&
+                stdev->models[i].config &&
                 (stdev->models[i].config->capture_handle ==
                  config->u.ses_info.capture_handle)) {
                 index = i;
@@ -3253,9 +3227,9 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
             goto exit;
         }
 
-        ALOGD("%s: close streaming %d, cap_handle:%d",
-              __func__, event, config->u.ses_info.capture_handle);
-        if (stdev->adnc_strm_handle[index]) {
+        ALOGD("%s: close streaming %d, cap_handle:%d, index:%d",
+              __func__, event, config->u.ses_info.capture_handle, index);
+        if (index != -1 && stdev->adnc_strm_handle[index] != 0) {
             stdev->adnc_strm_close(stdev->adnc_strm_handle[index]);
             stdev->adnc_strm_handle[index] = 0;
             stdev->is_streaming--;
@@ -3278,6 +3252,7 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
 
         for (i = 0; i < MAX_MODELS; i++) {
             if (stdev->models[i].is_active &&
+                stdev->models[i].config &&
                 (stdev->models[i].config->capture_handle ==
                  config->u.aud_info.ses_info->capture_handle)) {
                 index = i;
