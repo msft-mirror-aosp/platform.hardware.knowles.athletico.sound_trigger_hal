@@ -557,6 +557,94 @@ static void update_recover_list(struct knowles_sound_trigger_device *stdev,
     return;
 }
 
+static int check_and_setup_src_package(
+                                    struct knowles_sound_trigger_device *stdev)
+{
+    int err = 0;
+
+    if (stdev->is_src_package_loaded == false) {
+        err = setup_src_package(stdev->odsp_hdl);
+        if (err != 0) {
+            ALOGE("%s: Failed to load SRC package", __func__);
+            goto exit;
+        } else {
+            ALOGD("%s: SRC package loaded", __func__);
+            stdev->is_src_package_loaded = true;
+        }
+    } else {
+        ALOGD("%s: SRC package is already loaded", __func__);
+    }
+
+exit:
+    return err;
+}
+
+static int check_and_destroy_src_package(
+                                    struct knowles_sound_trigger_device *stdev)
+{
+    int err = 0;
+
+    if (!is_any_model_active(stdev) && stdev->is_src_package_loaded == true) {
+        err = destroy_src_package(stdev->odsp_hdl);
+        if (err != 0) {
+            ALOGE("%s: Failed to destroy SRC package", __func__);
+            goto exit;
+        } else {
+            ALOGD("%s: SRC package destroy", __func__);
+            stdev->is_src_package_loaded = false;
+        }
+    }
+
+exit:
+    return err;
+}
+
+static int check_and_setup_buffer_package(
+                                    struct knowles_sound_trigger_device *stdev)
+{
+    int err = 0;
+
+    if (stdev->is_buffer_package_loaded == false) {
+        err = setup_buffer_package(stdev->odsp_hdl);
+        if (err != 0) {
+            ALOGE("%s: Failed to load Buffer package", __func__);
+            goto exit;
+        } else {
+            ALOGD("%s: Buffer package loaded", __func__);
+            stdev->is_buffer_package_loaded = true;
+        }
+    } else {
+        ALOGD("%s: Buffer package is already loaded", __func__);
+    }
+
+exit:
+    return err;
+}
+
+static int check_and_destroy_buffer_package(
+                                    struct knowles_sound_trigger_device *stdev)
+{
+    int err = 0;
+
+    if (!is_any_model_active(stdev) &&
+        stdev->is_buffer_package_loaded &&
+        !stdev->is_sensor_destroy_in_prog &&
+        !stdev->is_sensor_route_enabled) {
+
+        err = destroy_buffer_package(stdev->odsp_hdl);
+        if (err != 0) {
+            ALOGE("%s: Failed to destroy Buffer package", __func__);
+            goto exit;
+        } else {
+            ALOGD("%s: Buffer package destroy", __func__);
+            stdev->is_buffer_package_loaded = false;
+        }
+    }
+
+exit:
+    return err;
+}
+
 static int setup_package(struct knowles_sound_trigger_device *stdev,
                         struct model_info *model)
 {
@@ -925,6 +1013,11 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
      */
     if (enable) {
         if (stdev->is_mic_route_enabled == false) {
+            err = check_and_setup_src_package(stdev);
+            if (err != 0) {
+                ALOGE("Fail to setup src Package");
+                goto exit;
+            }
             if (is_mic_controlled_by_audhal(stdev) == false) {
                 err = enable_mic_route(stdev->route_hdl, true, ct);
                 if (err != 0) {
@@ -1033,6 +1126,11 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
                    }
                }
                stdev->is_mic_route_enabled = false;
+               err = check_and_destroy_src_package(stdev);
+               if (err != 0) {
+                   ALOGE("Fail to destroy src Package");
+                   goto exit;
+               }
            }
        }
     }
@@ -1092,7 +1190,7 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
                 }
             }
             handle_input_source(stdev, false);
-
+            check_and_destroy_buffer_package(stdev);
         } else if (pre_mode == CON_ENABLED_ST && cur_mode == CON_ENABLED_CAPTURE_ST) {
             //reconfig mic
             if (stdev->is_mic_route_enabled == true) {
@@ -1137,6 +1235,7 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
                 // recover all models from list
                 if (is_uuid_in_recover_list(stdev, i)) {
                     if (stdev->models[i].is_active == false) {
+                        check_and_setup_buffer_package(stdev);
                         stdev->models[i].is_active = true;
                         handle_input_source(stdev, true);
 
@@ -1422,21 +1521,6 @@ exit:
     return err;
 }
 
-static void remove_buffer(struct knowles_sound_trigger_device *stdev)
-{
-    ALOGD("+%s+", __func__);
-
-    if (!is_any_model_loaded(stdev) &&
-        stdev->is_buffer_package_loaded &&
-        !stdev->is_sensor_destroy_in_prog &&
-        !stdev->is_sensor_route_enabled) {
-        destroy_buffer_package(stdev->odsp_hdl);
-        stdev->is_buffer_package_loaded = false;
-    }
-
-    ALOGD("-%s-", __func__);
-}
-
 static void destroy_sensor_model(struct knowles_sound_trigger_device *stdev)
 {
     int ret, i;
@@ -1467,7 +1551,7 @@ static void destroy_sensor_model(struct knowles_sound_trigger_device *stdev)
     }
 
     stdev->is_sensor_destroy_in_prog = false;
-    remove_buffer(stdev);
+    check_and_destroy_buffer_package(stdev);
 
     // There could be another thread waiting for us to destroy so signal that
     // thread, if no one is waiting then this signal will have no effect
@@ -1940,6 +2024,8 @@ static int stop_recognition(struct knowles_sound_trigger_device *stdev,
 
     handle_input_source(stdev, false);
 
+    check_and_destroy_buffer_package(stdev);
+
 exit:
     return status;
 }
@@ -2015,24 +2101,6 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         stdev->models[i].data_sz = kw_model_sz;
     }
 
-    if (stdev->is_buffer_package_loaded == false) {
-        ret = setup_buffer_package(stdev->odsp_hdl);
-        if (ret != 0) {
-            ALOGE("%s: ERROR: Failed to load the buffer package", __func__);
-            goto exit;
-        }
-        stdev->is_buffer_package_loaded = true;
-    }
-
-    if (stdev->is_src_package_loaded == false) {
-        ret = setup_src_package(stdev->odsp_hdl);
-        if (ret != 0) {
-            ALOGE("%s: ERROR: Failed to load the SRC package", __func__);
-            goto exit;
-        }
-        stdev->is_src_package_loaded = true;
-    }
-
     // Send the keyword model to the chip only for hotword and ambient audio
     if (check_uuid_equality(stdev->models[i].uuid,
                             stdev->hotword_model_uuid)) {
@@ -2049,6 +2117,12 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
     } else if (check_uuid_equality(stdev->models[i].uuid,
                                 stdev->sensor_model_uuid)) {
         // setup the sensor route
+        ret = check_and_setup_buffer_package(stdev);
+        if (ret != 0) {
+            ALOGE("%s: ERROR: Failed to load the buffer package", __func__);
+            goto exit;
+        }
+
         ret = start_sensor_model(stdev);
         if (ret) {
             ALOGE("%s: ERROR: Failed to start sensor model", __func__);
@@ -2060,6 +2134,12 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         // add chre to recover list
         if (can_enable_chre(stdev)) {
             if (stdev->models[i].is_active == false) {
+                ret = check_and_setup_buffer_package(stdev);
+                if (ret != 0) {
+                    ALOGE("%s: ERROR: Failed to load the buffer package",
+                        __func__);
+                    goto exit;
+                }
                 stdev->models[i].is_active = true;
                 handle_input_source(stdev, true);
                 setup_package(stdev, &stdev->models[i]);
@@ -2091,10 +2171,6 @@ exit:
         if (!is_any_model_loaded(stdev) && stdev->is_buffer_package_loaded) {
             destroy_buffer_package(stdev->odsp_hdl);
             stdev->is_buffer_package_loaded = false;
-        }
-        if (!is_any_model_loaded(stdev) && stdev->is_src_package_loaded) {
-            destory_src_package(stdev->odsp_hdl);
-            stdev->is_src_package_loaded = false;
         }
     }
     pthread_mutex_unlock(&stdev->lock);
@@ -2184,6 +2260,7 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
                             stdev->is_bargein_route_enabled);
             destroy_package(stdev, &stdev->models[handle]);
             handle_input_source(stdev, false);
+            check_and_destroy_buffer_package(stdev);
         }
     }
 
@@ -2199,16 +2276,6 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
         free(stdev->models[handle].data);
         stdev->models[handle].data = NULL;
         stdev->models[handle].data_sz = 0;
-    }
-
-    if (!is_any_model_loaded(stdev) && stdev->is_buffer_package_loaded) {
-        destroy_buffer_package(stdev->odsp_hdl);
-        stdev->is_buffer_package_loaded = false;
-    }
-
-    if (!is_any_model_loaded(stdev) && stdev->is_src_package_loaded) {
-        destory_src_package(stdev->odsp_hdl);
-        stdev->is_src_package_loaded = false;
     }
 
     ALOGD("%s: Successfully unloaded the model, handle - %d",
@@ -2289,6 +2356,12 @@ static int stdev_start_recognition(
         // recover model once voice/VoIP is ended.
         update_recover_list(stdev, handle, true);
         status = -EAGAIN;
+        goto exit;
+    }
+
+    status = check_and_setup_buffer_package(stdev);
+    if (status != 0) {
+        ALOGE("%s: ERROR: Failed to load the buffer package", __func__);
         goto exit;
     }
 
