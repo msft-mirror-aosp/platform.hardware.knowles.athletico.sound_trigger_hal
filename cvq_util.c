@@ -1231,7 +1231,7 @@ exit:
 
 }
 
-int destory_src_package(struct iaxxx_odsp_hw *odsp_hdl)
+int destroy_src_package(struct iaxxx_odsp_hw *odsp_hdl)
 {
     int err = 0;
 
