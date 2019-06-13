@@ -1620,6 +1620,13 @@ static int start_sensor_model(struct knowles_sound_trigger_device * stdev)
         }
     }
 
+    // setup the sensor route
+    err = check_and_setup_buffer_package(stdev);
+    if (err != 0) {
+        ALOGE("%s: ERROR: Failed to load the buffer package", __func__);
+        goto exit;
+    }
+
     if(stdev->is_sensor_route_enabled == false) {
         err = setup_sensor_package(stdev->odsp_hdl);
         if (err) {
@@ -2116,13 +2123,6 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         stdev->models[i].kw_id = ENTITY_KW_ID;
     } else if (check_uuid_equality(stdev->models[i].uuid,
                                 stdev->sensor_model_uuid)) {
-        // setup the sensor route
-        ret = check_and_setup_buffer_package(stdev);
-        if (ret != 0) {
-            ALOGE("%s: ERROR: Failed to load the buffer package", __func__);
-            goto exit;
-        }
-
         ret = start_sensor_model(stdev);
         if (ret) {
             ALOGE("%s: ERROR: Failed to start sensor model", __func__);
