@@ -187,7 +187,7 @@ int destroy_sensor_package(struct iaxxx_odsp_hw *odsp_hdl);
 int setup_mixer_package(struct iaxxx_odsp_hw *odsp_hdl);
 int destroy_mixer_package(struct iaxxx_odsp_hw *odsp_hdl);
 int setup_src_package(struct iaxxx_odsp_hw *odsp_hdl);
-int destory_src_package(struct iaxxx_odsp_hw *odsp_hdl);
+int destroy_src_package(struct iaxxx_odsp_hw *odsp_hdl);
 
 int setup_music_buffer(struct iaxxx_odsp_hw *odsp_hdl);
 int destroy_music_buffer(struct iaxxx_odsp_hw *odsp_hdl);
