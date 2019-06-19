@@ -953,9 +953,17 @@ int setup_chre_package(struct iaxxx_odsp_hw *odsp_hdl)
         goto exit;
     }
 
+    err = iaxxx_odsp_evt_subscribe(odsp_hdl, IAXXX_SYSID_HOST_1,
+                                   CHRE_EP_DISCONNECT, IAXXX_SYSID_HOST_0, 0);
+    if (err == -1) {
+        ALOGE("%s: ERROR: CHRE event subscription (CHRE EP disconnect) failed "
+              " with error %d(%s)", __func__, errno, strerror(errno));
+        goto exit;
+    }
+
     err = iaxxx_odsp_evt_trigger(odsp_hdl, CHRE_EVT_SRC_ID, CHRE_CONFIGURED, 0);
     if (err != 0) {
-        ALOGE("%s: ERROR: Oslo event trigger (chre configured) failed %d(%s)",
+        ALOGE("%s: ERROR: CHRE event trigger (chre configured) failed %d(%s)",
             __func__, errno, strerror(errno));
         goto exit;
     }
@@ -971,14 +979,6 @@ int destroy_chre_package(struct iaxxx_odsp_hw *odsp_hdl)
     int err = 0;
 
     ALOGD("+%s+", __func__);
-
-    err = iaxxx_odsp_evt_trigger(odsp_hdl, CHRE_EVT_SRC_ID, CHRE_DESTROYED, 0);
-    if (err != 0) {
-        ALOGE("%s: ERROR: Oslo event trigger (chre destroyed) failed %d(%s)",
-            __func__, errno, strerror(errno));
-        goto exit;
-    }
-
 
     err = iaxxx_odsp_evt_unsubscribe(odsp_hdl, CHRE_EVT_SRC_ID, CHRE_EVT_ID,
                                     IAXXX_SYSID_HOST_1);
@@ -1007,6 +1007,15 @@ int destroy_chre_package(struct iaxxx_odsp_hw *odsp_hdl)
         goto exit;
     }
 
+    err = iaxxx_odsp_evt_unsubscribe(odsp_hdl, IAXXX_SYSID_HOST_1,
+                                     CHRE_EP_DISCONNECT, IAXXX_SYSID_HOST_0);
+    if (err == -1) {
+        ALOGE("%s: ERROR: ODSP_EVENT_UNSUBSCRIBE (for event_id %d, src_id %d)"
+              " IOCTL failed with error %d(%s)", __func__, CHRE_EP_DISCONNECT,
+              IAXXX_SYSID_HOST_1, errno, strerror(errno));
+        goto exit;
+    }
+
     err = iaxxx_odsp_plugin_destroy(odsp_hdl, CHRE_INSTANCE_ID,
                                     IAXXX_HMD_BLOCK_ID);
     if (err != 0) {
@@ -1018,6 +1027,23 @@ int destroy_chre_package(struct iaxxx_odsp_hw *odsp_hdl)
     ALOGD("-%s-", __func__);
 
 exit:
+    return err;
+}
+
+int trigger_chre_destroy_event(struct iaxxx_odsp_hw *odsp_hdl) {
+    int err = 0;
+
+    ALOGD("+%s+", __func__);
+
+    err = iaxxx_odsp_evt_trigger(odsp_hdl, CHRE_EVT_SRC_ID, CHRE_DESTROYED, 0);
+    if (err == -1) {
+        ALOGE("%s: ERROR: CHRE event trigger (chre destroyed) failed with "
+              "error %d(%s)", __func__, errno, strerror(errno));
+        goto exit;
+    }
+
+exit:
+    ALOGD("-%s-", __func__);
     return err;
 }
 
