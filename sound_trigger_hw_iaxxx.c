@@ -2208,6 +2208,13 @@ static int stop_recognition(struct knowles_sound_trigger_device *stdev,
         goto exit;
     }
 
+    if (stdev->adnc_strm_handle[handle] != 0) {
+        ALOGD("%s: stop tunnling for index:%d", __func__, handle);
+        stdev->adnc_strm_close(stdev->adnc_strm_handle[handle]);
+        stdev->adnc_strm_handle[handle] = 0;
+        stdev->is_streaming--;
+    }
+
     model->is_active = false;
 
     tear_package_route(stdev, model->uuid, stdev->is_bargein_route_enabled);
