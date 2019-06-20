@@ -57,6 +57,7 @@
 #define OSLO_CONFIGURED         (0x201)
 #define OSLO_DESTROYED          (0x202)
 #define OSLO_EP_DISCONNECT      (0x205)
+#define CHRE_EP_DISCONNECT      (0x206)
 #define OSLO_BUF_INSTANCE_ID    8
 
 #define AEC_PKG_ID       7
@@ -225,4 +226,6 @@ int set_default_apll_clk(struct mixer *mixer);
 int get_fw_status(struct iaxxx_odsp_hw *odsp_hdl, unsigned int *status);
 int reset_fw(struct iaxxx_odsp_hw *odsp_hdl);
 int trigger_sensor_destroy_event(struct iaxxx_odsp_hw *odsp_hdl);
+int trigger_chre_destroy_event(struct iaxxx_odsp_hw *odsp_hdl);
+
 #endif /* _CVQ_IOCTL_H */
