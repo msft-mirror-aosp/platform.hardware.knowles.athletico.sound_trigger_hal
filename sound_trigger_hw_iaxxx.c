@@ -76,6 +76,9 @@
 #define SENSOR_CREATE_WAIT_TIME_IN_S   (1)
 #define SENSOR_CREATE_WAIT_MAX_COUNT   (5)
 
+#define CHRE_CREATE_WAIT_TIME_IN_S   (1)
+#define CHRE_CREATE_WAIT_MAX_COUNT   (5)
+
 #define ST_DEVICE_HANDSET_MIC 1
 
 #ifdef __LP64__
@@ -127,6 +130,7 @@ struct knowles_sound_trigger_device {
     pthread_t callback_thread;
     pthread_mutex_t lock;
     pthread_cond_t sensor_create;
+    pthread_cond_t chre_create;
     int opened;
     int send_sock;
     int recv_sock;
@@ -151,6 +155,7 @@ struct knowles_sound_trigger_device {
     bool is_mic_route_enabled;
     bool is_music_playing;
     bool is_bargein_route_enabled;
+    bool is_chre_route_enabled;
     bool is_buffer_package_loaded;
     bool is_sensor_route_enabled;
     bool is_src_package_loaded;
@@ -158,6 +163,7 @@ struct knowles_sound_trigger_device {
     int hotword_buffer_enable;
     int music_buffer_enable;
     bool is_sensor_destroy_in_prog;
+    bool is_chre_destroy_in_prog;
 
     // mode conditions
     bool is_media_recording;
@@ -184,6 +190,10 @@ struct knowles_sound_trigger_device {
     // sensor stop signal event
     timer_t ss_timer;
     bool ss_timer_created;
+
+    // Chre stop signal event
+    timer_t chre_timer;
+    bool chre_timer_created;
 };
 
 /*
@@ -194,7 +204,8 @@ struct knowles_sound_trigger_device {
 static struct knowles_sound_trigger_device g_stdev =
 {
     .lock = PTHREAD_MUTEX_INITIALIZER,
-    .sensor_create = PTHREAD_COND_INITIALIZER
+    .sensor_create = PTHREAD_COND_INITIALIZER,
+    .chre_create = PTHREAD_COND_INITIALIZER
 };
 
 static enum sthal_mode get_sthal_mode(struct knowles_sound_trigger_device *stdev)
@@ -628,8 +639,10 @@ static int check_and_destroy_buffer_package(
 
     if (!is_any_model_active(stdev) &&
         stdev->is_buffer_package_loaded &&
-        !stdev->is_sensor_destroy_in_prog &&
-        !stdev->is_sensor_route_enabled) {
+        (!stdev->is_sensor_destroy_in_prog &&
+        !stdev->is_sensor_route_enabled) &&
+        (!stdev->is_chre_destroy_in_prog &&
+        !stdev->is_chre_route_enabled)) {
 
         err = destroy_buffer_package(stdev->odsp_hdl);
         if (err != 0) {
@@ -941,9 +954,10 @@ static int set_package_route(struct knowles_sound_trigger_device *stdev,
      *[TODO] Add correct error return value for package route
      * b/119390722 for tracing.
      */
-    if (check_uuid_equality(uuid, stdev->chre_model_uuid))
+    if (check_uuid_equality(uuid, stdev->chre_model_uuid)) {
         set_chre_audio_route(stdev->route_hdl, bargein);
-    else if (check_uuid_equality(uuid, stdev->hotword_model_uuid)) {
+        stdev->is_chre_route_enabled = true;
+    } else if (check_uuid_equality(uuid, stdev->hotword_model_uuid)) {
         if (!((stdev->current_enable & PLUGIN1_MASK) & ~HOTWORD_MASK)) {
             set_hotword_route(stdev->route_hdl, bargein);
         }
@@ -973,9 +987,10 @@ static int tear_package_route(struct knowles_sound_trigger_device *stdev,
      *[TODO] Add correct error return value for package route
      * b/119390722 for tracing.
      */
-    if (check_uuid_equality(uuid, stdev->chre_model_uuid))
+    if (check_uuid_equality(uuid, stdev->chre_model_uuid)) {
         tear_chre_audio_route(stdev->route_hdl, bargein);
-    else if (check_uuid_equality(uuid, stdev->hotword_model_uuid)) {
+        stdev->is_chre_route_enabled = false;
+    } else if (check_uuid_equality(uuid, stdev->hotword_model_uuid)) {
         if (!((stdev->current_enable & PLUGIN1_MASK) & ~HOTWORD_MASK))
             tear_hotword_route(stdev->route_hdl, bargein);
     } else if (check_uuid_equality(uuid, stdev->wakeup_model_uuid)) {
@@ -1648,6 +1663,177 @@ exit:
     return err;
 }
 
+static void crash_handler_chre(struct knowles_sound_trigger_device *stdev)
+{
+    int i;
+
+    if (stdev->is_chre_destroy_in_prog == false)
+        return;
+
+    if (stdev->chre_timer_created) {
+        timer_delete(stdev->chre_timer);
+        stdev->chre_timer_created = false;
+    }
+
+    if (stdev->is_chre_route_enabled == true) {
+        for (i = 0; i < MAX_MODELS; i++) {
+            if (check_uuid_equality(stdev->models[i].uuid,
+                                    stdev->chre_model_uuid)) {
+                stdev->models[i].is_active = false;
+                stdev->models[i].is_loaded = false;
+                memset(&stdev->models[i].uuid, 0,
+                       sizeof(sound_trigger_uuid_t));
+                break;
+            }
+        }
+        stdev->is_chre_route_enabled = false;
+        stdev->current_enable &= ~CHRE_MASK;
+    }
+    stdev->is_chre_destroy_in_prog = false;
+
+    // There could be another thread waiting for us to destroy
+    // so signal that thread, if no one is waiting then this signal
+    // will have no effect
+    pthread_cond_signal(&stdev->chre_create);
+}
+
+static int start_chre_model(struct knowles_sound_trigger_device *stdev,
+                            int model_id)
+{
+    struct timespec ts;
+    int wait_counter = 0, err = 0;
+
+    while (stdev->is_chre_destroy_in_prog == true &&
+           wait_counter < CHRE_CREATE_WAIT_MAX_COUNT) {
+        // We wait for 1sec * MAX_COUNT times for the HOST 1 to respond, if
+        // within that time we don't get any response, we will go ahead with the
+        // sensor model creation. Note this might result in an error which would
+        // be better than blocking the thread indefinitely.
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += CHRE_CREATE_WAIT_TIME_IN_S;
+        err = pthread_cond_timedwait(&stdev->chre_create, &stdev->lock, &ts);
+        if (err == ETIMEDOUT) {
+            ALOGE("%s: WARNING: CHRE create timed out after %ds",
+                    __func__, CHRE_CREATE_WAIT_TIME_IN_S);
+            wait_counter++;
+        }
+    }
+
+    // If firmware crashed when we are waiting
+    if (stdev->is_st_hal_ready == false) {
+        err = -EAGAIN;
+        goto exit;
+    }
+
+    if (stdev->is_chre_destroy_in_prog == true) {
+        ALOGE("%s: ERROR: Waited for %ds but we didn't get the event from "
+              "Host 1, forcing a destroy", __func__,
+              CHRE_CREATE_WAIT_TIME_IN_S * CHRE_CREATE_WAIT_MAX_COUNT);
+        stdev->is_sensor_destroy_in_prog = false;
+        // Reset timedout error
+        err = 0;
+
+        if (stdev->is_chre_route_enabled == true) {
+            tear_chre_audio_route(stdev->route_hdl,
+                                  stdev->is_bargein_route_enabled);
+            err = destroy_chre_package(stdev->odsp_hdl);
+            if (err != 0) {
+                ALOGE("%s: ERROR: Failed to destroy chre package", __func__);
+                goto exit;
+            }
+            stdev->is_chre_route_enabled = false;
+        }
+    }
+
+    // setup the sensor route
+    err = check_and_setup_buffer_package(stdev);
+    if (err != 0) {
+        ALOGE("%s: ERROR: Failed to load the buffer package", __func__);
+        goto exit;
+    }
+
+    // add chre to recover list
+    if (can_enable_chre(stdev)) {
+        if(stdev->is_chre_route_enabled == false) {
+            stdev->models[model_id].is_active = true;
+            handle_input_source(stdev, true);
+            setup_package(stdev, &stdev->models[model_id]);
+            set_package_route(stdev, stdev->models[model_id].uuid,
+                              stdev->is_bargein_route_enabled);
+            stdev->is_chre_route_enabled = true;
+        }
+    } else {
+        ALOGW("%s: device is recording / in call, can't enable chre now",
+              __func__);
+        if (can_update_recover_list(stdev) == true)
+            update_recover_list(stdev, model_id, true);
+    }
+
+exit:
+    return err;
+}
+
+static void destroy_chre_model(struct knowles_sound_trigger_device *stdev)
+{
+    int err = 0;
+    ALOGD("+%s+", __func__);
+
+    if (stdev->is_chre_route_enabled == true) {
+        int i;
+        tear_chre_audio_route(stdev->route_hdl,
+                              stdev->is_bargein_route_enabled);
+        err = destroy_chre_package(stdev->odsp_hdl);
+        if (err != 0) {
+            ALOGE("%s: ERROR: Failed to destroy chre package", __func__);
+        }
+
+        // now we can change the flag
+        for (i = 0; i < MAX_MODELS; i++) {
+            if (check_uuid_equality(stdev->models[i].uuid,
+                                    stdev->chre_model_uuid)) {
+                stdev->models[i].is_active = false;
+                stdev->models[i].is_loaded = false;
+                memset(&stdev->models[i].uuid, 0,
+                       sizeof(sound_trigger_uuid_t));
+                break;
+            }
+        }
+        handle_input_source(stdev, false);
+        stdev->is_chre_route_enabled = false;
+        stdev->current_enable = stdev->current_enable & ~CHRE_MASK;
+    }
+
+    stdev->is_chre_destroy_in_prog = false;
+
+    // setup the sensor route
+    err = check_and_destroy_buffer_package(stdev);
+    if (err != 0) {
+        ALOGE("%s: ERROR: Failed to destroy buffer package", __func__);
+    }
+
+    // There could be another thread waiting for us to destroy so signal that
+    // thread, if no one is waiting then this signal will have no effect
+    pthread_cond_signal(&stdev->chre_create);
+
+    ALOGD("-%s-", __func__);
+}
+
+static void chre_stop_timeout()
+{
+    ALOGD("+%s+", __func__);
+
+    struct knowles_sound_trigger_device *stdev = &g_stdev;
+    pthread_mutex_lock(&stdev->lock);
+    // We are here because we timed out so check if we still need to destroy
+    // the chre package, if yes then go ahead otherwise do nothing
+    if (stdev->is_chre_destroy_in_prog == true) {
+        destroy_chre_model(stdev);
+    }
+    pthread_mutex_unlock(&stdev->lock);
+    ALOGD("-%s-", __func__);
+}
+
+
 static void *callback_thread_loop(void *context)
 {
     struct knowles_sound_trigger_device *stdev =
@@ -1784,6 +1970,23 @@ static void *callback_thread_loop(void *context)
                             }
 
                             break;
+                        } else if (ge.event_id == CHRE_EP_DISCONNECT) {
+                            ALOGD("Eventid received is CHRE_EP_DISCONNECT %d",
+                                  CHRE_EP_DISCONNECT);
+                            if (stdev->is_chre_destroy_in_prog == true) {
+                                destroy_chre_model(stdev);
+
+                                // A timer would have been created during stop,
+                                // check and delete it
+                                if (stdev->chre_timer_created) {
+                                    timer_delete(stdev->chre_timer);
+                                    stdev->chre_timer_created = false;
+                                }
+                            } else {
+                                ALOGE("Unexpected CHRE_EP_DISCONNECT received"
+                                      ", ignoring..");
+                            }
+                            break;
                         } else if (ge.event_id == ENTITY_KW_ID) {
                             ALOGD("Eventid received is ENTITY_KW_ID %d",
                                 ENTITY_KW_ID);
@@ -1833,6 +2036,9 @@ static void *callback_thread_loop(void *context)
                     // Don't allow any op on ST HAL until recovery is complete
                     stdev->is_st_hal_ready = false;
                     stdev->is_streaming = false;
+
+                    // Firmware crashed, cancel CHRE timer and flags here
+                    crash_handler_chre(stdev);
                 }
 
                 i += strlen(msg + i) + 1;
@@ -2002,6 +2208,13 @@ static int stop_recognition(struct knowles_sound_trigger_device *stdev,
         goto exit;
     }
 
+    if (stdev->adnc_strm_handle[handle] != 0) {
+        ALOGD("%s: stop tunnling for index:%d", __func__, handle);
+        stdev->adnc_strm_close(stdev->adnc_strm_handle[handle]);
+        stdev->adnc_strm_handle[handle] = 0;
+        stdev->is_streaming--;
+    }
+
     model->is_active = false;
 
     tear_package_route(stdev, model->uuid, stdev->is_bargein_route_enabled);
@@ -2131,26 +2344,10 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         stdev->models[i].kw_id = USELESS_KW_ID;
     } else if (check_uuid_equality(stdev->models[i].uuid,
                                 stdev->chre_model_uuid)) {
-        // add chre to recover list
-        if (can_enable_chre(stdev)) {
-            if (stdev->models[i].is_active == false) {
-                ret = check_and_setup_buffer_package(stdev);
-                if (ret != 0) {
-                    ALOGE("%s: ERROR: Failed to load the buffer package",
-                        __func__);
-                    goto exit;
-                }
-                stdev->models[i].is_active = true;
-                handle_input_source(stdev, true);
-                setup_package(stdev, &stdev->models[i]);
-                set_package_route(stdev, stdev->models[i].uuid,
-                                stdev->is_bargein_route_enabled);
-            }
-        } else {
-            ALOGW("%s: device is recording / in call, can't enable chre now",
-                  __func__);
-            if (can_update_recover_list(stdev) == true)
-                update_recover_list(stdev, i, true);
+        ret = start_chre_model(stdev, i);
+        if (ret) {
+            ALOGE("%s: ERROR: Failed to start chre model", __func__);
+            goto exit;
         }
         stdev->models[i].kw_id = USELESS_KW_ID;
     } else {
@@ -2249,18 +2446,46 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
             }
         }
     } else if (check_uuid_equality(stdev->models[handle].uuid,
-                                stdev->chre_model_uuid)) {
+                                   stdev->chre_model_uuid)) {
         // remove chre from recover list
         if (can_update_recover_list(stdev) == true)
             update_recover_list(stdev, handle, false);
 
-        if (stdev->models[handle].is_active == true) {
-            stdev->models[handle].is_active = false;
-            tear_package_route(stdev, stdev->models[handle].uuid,
-                            stdev->is_bargein_route_enabled);
-            destroy_package(stdev, &stdev->models[handle]);
-            handle_input_source(stdev, false);
-            check_and_destroy_buffer_package(stdev);
+         // Disable the CHRE route
+        if (true == stdev->is_chre_route_enabled) {
+            struct itimerspec chre_timer_spec;
+            struct sigevent chre_sigevent;
+
+            // Inform the host 1
+            stdev->is_chre_destroy_in_prog = true;
+            trigger_chre_destroy_event(stdev->odsp_hdl);
+
+            // Start timer for 5 seconds
+            chre_sigevent.sigev_notify = SIGEV_THREAD;
+            chre_sigevent.sigev_notify_function = chre_stop_timeout;
+            chre_sigevent.sigev_notify_attributes = NULL;
+
+            chre_timer_spec.it_interval.tv_sec = 0;
+            chre_timer_spec.it_interval.tv_nsec = 0;
+            chre_timer_spec.it_value.tv_sec =
+                    CHRE_CREATE_WAIT_TIME_IN_S * CHRE_CREATE_WAIT_MAX_COUNT;
+            chre_timer_spec.it_value.tv_nsec = 0;
+
+            if (stdev->chre_timer_created) {
+                timer_delete(stdev->chre_timer);
+                stdev->chre_timer_created = false;
+            }
+
+            if (timer_create(CLOCK_REALTIME,
+                             &chre_sigevent, &stdev->chre_timer) == -1) {
+                ALOGE("%s: Timer Create Failed", __func__);
+            } else {
+                stdev->chre_timer_created = true;
+                if (timer_settime(stdev->chre_timer,
+                                  0, &chre_timer_spec, NULL) == -1) {
+                    ALOGE("%s: Timer Set Failed", __func__);
+                }
+            }
         }
     }
 
@@ -2268,8 +2493,11 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
     stdev->models[handle].sound_model_cookie = NULL;
 
     if (!(check_uuid_equality(stdev->models[handle].uuid,
-                                stdev->sensor_model_uuid) &&
-            stdev->is_sensor_destroy_in_prog))
+                              stdev->sensor_model_uuid) &&
+            stdev->is_sensor_destroy_in_prog) &&
+        !(check_uuid_equality(stdev->models[handle].uuid,
+                              stdev->chre_model_uuid) &&
+            stdev->is_chre_destroy_in_prog))
         stdev->models[handle].is_loaded = false;
 
     if (stdev->models[handle].data) {
@@ -2835,6 +3063,7 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->is_voice_voip_stop = false;
     stdev->is_music_playing = false;
     stdev->is_bargein_route_enabled = false;
+    stdev->is_chre_route_enabled = false;
     stdev->is_buffer_package_loaded = false;
     stdev->hotword_buffer_enable = 0;
     stdev->music_buffer_enable = 0;
@@ -2846,6 +3075,9 @@ static int stdev_open(const hw_module_t *module, const char *name,
 
     stdev->is_sensor_destroy_in_prog = false;
     stdev->ss_timer_created = false;
+
+    stdev->is_chre_destroy_in_prog = false;
+    stdev->chre_timer_created = false;
 
     stdev->snd_crd_num = snd_card_num;
     stdev->fw_reset_done_by_hal = false;
