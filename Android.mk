@@ -244,6 +244,16 @@ LOCAL_SHARED_LIBRARIES := libcutils \
 include $(BUILD_EXECUTABLE)
 
 include $(CLEAR_VARS)
+LOCAL_MODULE := crash_trigger_test
+LOCAL_SRC_FILES := tests/crash_trigger_test.c
+LOCAL_VENDOR_MODULE := true
+LOCAL_C_INCLUDES += $(LOCAL_PATH)/../hal
+LOCAL_32_BIT_ONLY := true
+LOCAL_SHARED_LIBRARIES := liblog libodsp
+
+include $(BUILD_EXECUTABLE)
+
+include $(CLEAR_VARS)
 LOCAL_MODULE := plugin_status_test
 LOCAL_SRC_FILES := tests/plugin_status_test.c
 LOCAL_VENDOR_MODULE := true
