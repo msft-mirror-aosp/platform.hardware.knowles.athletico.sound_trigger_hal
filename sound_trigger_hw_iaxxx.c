@@ -345,6 +345,22 @@ static int find_handle_for_kw_id(
     return i;
 }
 
+static int find_handle_for_uuid(
+                        struct knowles_sound_trigger_device *stdev,
+                        sound_trigger_uuid_t uuid)
+{
+    int i = 0;
+    for (i = 0; i < MAX_MODELS; i++) {
+        if (check_uuid_equality(uuid, stdev->models[i].uuid))
+            break;
+    }
+
+    if (i == MAX_MODELS)
+        return -1;
+    else
+        return i;
+}
+
 static bool is_any_model_active(struct knowles_sound_trigger_device *stdev) {
     int i = 0;
     for (i = 0; i < MAX_MODELS; i++) {
@@ -1599,6 +1615,7 @@ static void destroy_sensor_model(struct knowles_sound_trigger_device *stdev)
     for (i = 0 ; i < MAX_MODELS ; i++) {
         if (check_uuid_equality(stdev->models[i].uuid,
                                 stdev->sensor_model_uuid)) {
+            memset(&stdev->models[i].uuid, 0, sizeof(sound_trigger_uuid_t));
             stdev->models[i].is_loaded = false;
             break;
         }
@@ -2325,16 +2342,69 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         goto exit;
     }
 
-    kw_buffer = (unsigned char *) sound_model + sound_model->data_offset;
-    kw_model_sz = sound_model->data_size;
-    ALOGV("%s: kw_model_sz %d", __func__, kw_model_sz);
+    i = find_handle_for_uuid(stdev, sound_model->vendor_uuid);
+    if (i != -1) {
+        ALOGW("%s: model is existed at index %d", __func__, i);
+        *handle = i;
+        goto exit;
+    }
 
-    // Load the keyword model file
     // Find an empty slot to load the model
     i = find_empty_model_slot(stdev);
     if (i == -1) {
         ALOGE("%s: Can't load model no free slots available", __func__);
         ret = -ENOSYS;
+        goto exit;
+    }
+
+    kw_buffer = (unsigned char *) sound_model + sound_model->data_offset;
+    kw_model_sz = sound_model->data_size;
+    ALOGV("%s: kw_model_sz %d", __func__, kw_model_sz);
+
+    stdev->models[i].data = malloc(kw_model_sz);
+    if (stdev->models[i].data == NULL) {
+        stdev->models[i].data_sz = 0;
+        ALOGE("%s: could not allocate memory for keyword model data",
+            __func__);
+        ret = -ENOMEM;
+        goto exit;
+    } else {
+        memcpy(stdev->models[i].data, kw_buffer, kw_model_sz);
+        stdev->models[i].data_sz = kw_model_sz;
+    }
+
+    // Send the keyword model to the chip only for hotword and ambient audio
+    if (check_uuid_equality(sound_model->vendor_uuid,
+                            stdev->hotword_model_uuid)) {
+        stdev->models[i].kw_id = OK_GOOGLE_KW_ID;
+    } else if (check_uuid_equality(sound_model->vendor_uuid,
+                                stdev->wakeup_model_uuid)) {
+        stdev->models[i].kw_id = WAKEUP_KW_ID;
+    } else if (check_uuid_equality(sound_model->vendor_uuid,
+                                stdev->ambient_model_uuid)) {
+        stdev->models[i].kw_id = AMBIENT_KW_ID;
+    } else if (check_uuid_equality(sound_model->vendor_uuid,
+                                stdev->entity_model_uuid)) {
+        stdev->models[i].kw_id = ENTITY_KW_ID;
+    } else if (check_uuid_equality(sound_model->vendor_uuid,
+                                stdev->sensor_model_uuid)) {
+        ret = start_sensor_model(stdev);
+        if (ret) {
+            ALOGE("%s: ERROR: Failed to start sensor model", __func__);
+            goto exit;
+        }
+        stdev->models[i].kw_id = USELESS_KW_ID;
+    } else if (check_uuid_equality(sound_model->vendor_uuid,
+                                stdev->chre_model_uuid)) {
+        ret = start_chre_model(stdev, i);
+        if (ret) {
+            ALOGE("%s: ERROR: Failed to start chre model", __func__);
+            goto exit;
+        }
+        stdev->models[i].kw_id = USELESS_KW_ID;
+    } else {
+        ALOGE("%s: ERROR: unknown keyword model file", __func__);
+        ret = -EINVAL;
         goto exit;
     }
 
@@ -2349,51 +2419,6 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
     stdev->models[i].sound_model_cookie = cookie;
     stdev->models[i].recognition_callback = NULL;
     stdev->models[i].recognition_cookie = NULL;
-
-    stdev->models[i].data = malloc(kw_model_sz);
-    if (stdev->models[i].data == NULL) {
-        ALOGE("%s: Warning, could not allocate memory for keyword model data,"
-            " cannot redownload on crash", __func__);
-        stdev->models[i].data_sz = 0;
-    } else {
-        memcpy(stdev->models[i].data, kw_buffer, kw_model_sz);
-        stdev->models[i].data_sz = kw_model_sz;
-    }
-
-    // Send the keyword model to the chip only for hotword and ambient audio
-    if (check_uuid_equality(stdev->models[i].uuid,
-                            stdev->hotword_model_uuid)) {
-        stdev->models[i].kw_id = OK_GOOGLE_KW_ID;
-    } else if (check_uuid_equality(stdev->models[i].uuid,
-                                stdev->wakeup_model_uuid)) {
-        stdev->models[i].kw_id = WAKEUP_KW_ID;
-    } else if (check_uuid_equality(stdev->models[i].uuid,
-                                stdev->ambient_model_uuid)) {
-        stdev->models[i].kw_id = AMBIENT_KW_ID;
-    } else if (check_uuid_equality(stdev->models[i].uuid,
-                                stdev->entity_model_uuid)) {
-        stdev->models[i].kw_id = ENTITY_KW_ID;
-    } else if (check_uuid_equality(stdev->models[i].uuid,
-                                stdev->sensor_model_uuid)) {
-        ret = start_sensor_model(stdev);
-        if (ret) {
-            ALOGE("%s: ERROR: Failed to start sensor model", __func__);
-            goto exit;
-        }
-        stdev->models[i].kw_id = USELESS_KW_ID;
-    } else if (check_uuid_equality(stdev->models[i].uuid,
-                                stdev->chre_model_uuid)) {
-        ret = start_chre_model(stdev, i);
-        if (ret) {
-            ALOGE("%s: ERROR: Failed to start chre model", __func__);
-            goto exit;
-        }
-        stdev->models[i].kw_id = USELESS_KW_ID;
-    } else {
-        ALOGE("%s: ERROR: unknown keyword model file", __func__);
-        ret = -EINVAL;
-        goto exit;
-    }
 
     stdev->models[i].is_loaded = true;
 
@@ -2536,8 +2561,10 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
             stdev->is_sensor_destroy_in_prog) &&
         !(check_uuid_equality(stdev->models[handle].uuid,
                               stdev->chre_model_uuid) &&
-            stdev->is_chre_destroy_in_prog))
+            stdev->is_chre_destroy_in_prog)) {
+        memset(&stdev->models[handle].uuid, 0, sizeof(sound_trigger_uuid_t));
         stdev->models[handle].is_loaded = false;
+    }
 
     if (stdev->models[handle].data) {
         free(stdev->models[handle].data);
@@ -3087,6 +3114,8 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->opened = true;
     /* Initialize all member variable */
     for (i = 0; i < MAX_MODELS; i++) {
+        stdev->models[i].type = SOUND_MODEL_TYPE_UNKNOWN;
+        memset(&stdev->models[i].uuid, 0, sizeof(sound_trigger_uuid_t));
         stdev->models[i].config = NULL;
         stdev->models[i].data = NULL;
         stdev->models[i].data_sz = 0;
