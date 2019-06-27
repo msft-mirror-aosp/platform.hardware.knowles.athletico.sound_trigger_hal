@@ -1785,7 +1785,7 @@ static int start_chre_model(struct knowles_sound_trigger_device *stdev,
         ALOGE("%s: ERROR: Waited for %ds but we didn't get the event from "
               "Host 1, forcing a destroy", __func__,
               CHRE_CREATE_WAIT_TIME_IN_S * CHRE_CREATE_WAIT_MAX_COUNT);
-        stdev->is_sensor_destroy_in_prog = false;
+        stdev->is_chre_destroy_in_prog = false;
         // Reset timedout error
         err = 0;
 
@@ -1813,10 +1813,11 @@ static int start_chre_model(struct knowles_sound_trigger_device *stdev,
         if(stdev->is_chre_route_enabled == false) {
             stdev->models[model_id].is_active = true;
             handle_input_source(stdev, true);
-            setup_package(stdev, &stdev->models[model_id]);
-            set_package_route(stdev, stdev->models[model_id].uuid,
-                              stdev->is_bargein_route_enabled);
+            setup_chre_package(stdev->odsp_hdl);
+            set_chre_audio_route(stdev->route_hdl,
+                                stdev->is_bargein_route_enabled);
             stdev->is_chre_route_enabled = true;
+            stdev->current_enable = stdev->current_enable | CHRE_MASK;
         }
     } else {
         ALOGW("%s: device is recording / in call, can't enable chre now",
@@ -2342,11 +2343,24 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         goto exit;
     }
 
-    i = find_handle_for_uuid(stdev, sound_model->vendor_uuid);
-    if (i != -1) {
-        ALOGW("%s: model is existed at index %d", __func__, i);
-        *handle = i;
-        goto exit;
+    // When a delayed CHRE/Oslo destroy process is in progress,
+    // we should not skip the new model and return the existing handle
+    // which will be destroyed soon.
+    if ((check_uuid_equality(sound_model->vendor_uuid,
+                             stdev->chre_model_uuid) &&
+            stdev->is_chre_destroy_in_prog) ||
+            (check_uuid_equality(sound_model->vendor_uuid,
+                                 stdev->sensor_model_uuid) &&
+            stdev->is_sensor_destroy_in_prog)) {
+        ALOGD("%s: CHRE/Oslo destroy in progress, skipped handle check.",
+              __func__);
+    } else {
+        i = find_handle_for_uuid(stdev, sound_model->vendor_uuid);
+        if (i != -1) {
+            ALOGW("%s: model is existed at index %d", __func__, i);
+            *handle = i;
+            goto exit;
+        }
     }
 
     // Find an empty slot to load the model
