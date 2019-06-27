@@ -2342,11 +2342,24 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         goto exit;
     }
 
-    i = find_handle_for_uuid(stdev, sound_model->vendor_uuid);
-    if (i != -1) {
-        ALOGW("%s: model is existed at index %d", __func__, i);
-        *handle = i;
-        goto exit;
+    // When a delayed CHRE/Oslo destroy process is in progress,
+    // we should not skip the new model and return the existing handle
+    // which will be destroyed soon.
+    if ((check_uuid_equality(sound_model->vendor_uuid,
+                             stdev->chre_model_uuid) &&
+            stdev->is_chre_destroy_in_prog) ||
+            (check_uuid_equality(sound_model->vendor_uuid,
+                                 stdev->sensor_model_uuid) &&
+            stdev->is_sensor_destroy_in_prog)) {
+        ALOGD("%s: CHRE/Oslo destroy in progress, skipped handle check.",
+              __func__);
+    } else {
+        i = find_handle_for_uuid(stdev, sound_model->vendor_uuid);
+        if (i != -1) {
+            ALOGW("%s: model is existed at index %d", __func__, i);
+            *handle = i;
+            goto exit;
+        }
     }
 
     // Find an empty slot to load the model
