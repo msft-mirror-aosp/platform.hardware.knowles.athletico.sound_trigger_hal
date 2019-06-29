@@ -60,7 +60,10 @@ char *crash_dump_split_file_names[] =
     "/data/data/dump_debug_DMX_",
     "/data/data/dump_crash_CM4_",
     "/data/data/dump_crash_HMD_",
-    "/data/data/dump_crash_DMX_"
+    "/data/data/dump_crash_DMX_",
+    "/data/data/dump_crash_SSP_RAM0_",
+    "/data/data/dump_crash_SSP_RAM1_",
+    "/data/data/dump_crash_SSP_ROM0_",
     };
 
 char *ssr_crash_dump_split_file_names[] = {
@@ -70,6 +73,9 @@ char *ssr_crash_dump_split_file_names[] = {
     "ia_dump_crash_CM4_",
     "ia_dump_crash_HMD_",
     "ia_dump_crash_DMX_",
+    "ia_dump_crash_SSP_RAM0_",
+    "ia_dump_crash_SSP_RAM1_",
+    "ia_dump_crash_SSP_ROM0_",
 };
 
 int split_bin(unsigned char *buf, int len, const char* time_stamp)
