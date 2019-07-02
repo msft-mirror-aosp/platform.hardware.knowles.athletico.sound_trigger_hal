@@ -72,6 +72,7 @@
 #define MAX_SND_CARD    (8)
 #define RETRY_NUMBER    (10)
 #define RETRY_US        (500000)
+#define TUNNEL_TIMEOUT  5
 
 #define SENSOR_CREATE_WAIT_TIME_IN_S   (1)
 #define SENSOR_CREATE_WAIT_MAX_COUNT   (5)
@@ -128,7 +129,9 @@ struct knowles_sound_trigger_device {
     struct model_info models[MAX_MODELS];
     sound_trigger_uuid_t authkw_model_uuid;
     pthread_t callback_thread;
+    pthread_t monitor_thread;
     pthread_mutex_t lock;
+    pthread_cond_t tunnel_create;
     pthread_cond_t sensor_create;
     pthread_cond_t chre_create;
     int opened;
@@ -143,6 +146,7 @@ struct knowles_sound_trigger_device {
     size_t (*adnc_strm_read)(long, void *, size_t);
     int (*adnc_strm_close)(long);
     long adnc_strm_handle[MAX_MODELS];
+    struct timespec adnc_strm_last_read[MAX_MODELS];
 
     sound_trigger_uuid_t hotword_model_uuid;
     sound_trigger_uuid_t sensor_model_uuid;
@@ -204,9 +208,12 @@ struct knowles_sound_trigger_device {
 static struct knowles_sound_trigger_device g_stdev =
 {
     .lock = PTHREAD_MUTEX_INITIALIZER,
+    .tunnel_create = PTHREAD_COND_INITIALIZER,
     .sensor_create = PTHREAD_COND_INITIALIZER,
     .chre_create = PTHREAD_COND_INITIALIZER
 };
+
+static struct timespec reset_time = {0};
 
 static enum sthal_mode get_sthal_mode(struct knowles_sound_trigger_device *stdev)
 {
@@ -1194,6 +1201,7 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
                     ALOGD("%s: stop tunnling for index:%d", __func__, i);
                     stdev->adnc_strm_close(stdev->adnc_strm_handle[i]);
                     stdev->adnc_strm_handle[i] = 0;
+                    stdev->adnc_strm_last_read[i] = reset_time;
                 }
             }
             stdev->is_streaming = 0;
@@ -1890,6 +1898,42 @@ static void chre_stop_timeout()
     ALOGD("-%s-", __func__);
 }
 
+static void *monitor_thread_loop(void *context)
+{
+    struct knowles_sound_trigger_device *stdev =
+        (struct knowles_sound_trigger_device *)context;
+    struct timespec now;
+    double diff;
+
+    pthread_mutex_lock(&stdev->lock);
+    while (1) {
+            if (!stdev->is_streaming)
+                pthread_cond_wait(&stdev->tunnel_create, &stdev->lock);
+            pthread_mutex_unlock(&stdev->lock);
+
+            sleep(TUNNEL_TIMEOUT);
+
+            pthread_mutex_lock(&stdev->lock);
+
+            clock_gettime(CLOCK_REALTIME, &now);
+            for (int i = 0; i < MAX_MODELS; i++) {
+                if (stdev->adnc_strm_handle[i] != 0) {
+                    diff = (now.tv_sec - stdev->adnc_strm_last_read[i].tv_sec)
+                        + (double) ((now.tv_nsec) - (stdev->adnc_strm_last_read[i].tv_nsec))
+                          / 1000000000.0;
+
+                    if (diff > TUNNEL_TIMEOUT) {
+                        ALOGE("%s: Waiting timeout for %f sec", __func__, diff);
+                        stdev->adnc_strm_close(stdev->adnc_strm_handle[i]);
+                        stdev->adnc_strm_handle[i] = 0;
+                        stdev->is_streaming--;
+                        stdev->adnc_strm_last_read[i] = reset_time;
+                    }
+                }
+            }
+    }
+    pthread_mutex_unlock(&stdev->lock);
+}
 
 static void *callback_thread_loop(void *context)
 {
@@ -2092,7 +2136,7 @@ static void *callback_thread_loop(void *context)
                     ALOGD("Firmware has crashed");
                     // Don't allow any op on ST HAL until recovery is complete
                     stdev->is_st_hal_ready = false;
-                    stdev->is_streaming = false;
+                    stdev->is_streaming = 0;
 
                     // Firmware crashed, cancel CHRE timer and flags here
                     crash_handler_chre(stdev);
@@ -2270,6 +2314,7 @@ static int stop_recognition(struct knowles_sound_trigger_device *stdev,
         stdev->adnc_strm_close(stdev->adnc_strm_handle[handle]);
         stdev->adnc_strm_handle[handle] = 0;
         stdev->is_streaming--;
+        stdev->adnc_strm_last_read[handle] = reset_time;
     }
 
     model->is_active = false;
@@ -2883,6 +2928,7 @@ static int open_streaming_lib(struct knowles_sound_trigger_device *stdev) {
                 __func__, ADNC_STRM_LIBRARY_PATH);
             for (int index = 0; index < MAX_MODELS; index++) {
                 stdev->adnc_strm_handle[index] = 0;
+                stdev->adnc_strm_last_read[index] = reset_time;
             }
             stdev->adnc_strm_open =
                 (int (*)(bool, int, int))dlsym(stdev->adnc_cvq_strm_lib,
@@ -3188,6 +3234,9 @@ static int stdev_open(const hw_module_t *module, const char *name,
     // Create a thread to handle all events from kernel
     pthread_create(&stdev->callback_thread, (const pthread_attr_t *) NULL,
                 callback_thread_loop, stdev);
+
+    pthread_create(&stdev->monitor_thread, (const pthread_attr_t *) NULL,
+                monitor_thread_loop, stdev);
 
     *device = &stdev->device.common; /* same address as stdev */
 exit:
@@ -3609,6 +3658,7 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                     stdev->adnc_strm_close(stdev->adnc_strm_handle[i]);
                     stdev->adnc_strm_handle[i] = 0;
                     stdev->is_streaming--;
+                    stdev->adnc_strm_last_read[i] = reset_time;
                 }
             }
             goto exit;
@@ -3620,6 +3670,7 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
             stdev->adnc_strm_close(stdev->adnc_strm_handle[index]);
             stdev->adnc_strm_handle[index] = 0;
             stdev->is_streaming--;
+            stdev->adnc_strm_last_read[index] = reset_time;
         }
 
         break;
@@ -3673,6 +3724,10 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                     ALOGD("Successfully opened adnc strm! index %d handle %d",
                           index, config->u.aud_info.ses_info->capture_handle);
                     stdev->is_streaming++;
+
+                    clock_gettime(CLOCK_REALTIME, &stdev->adnc_strm_last_read[index]);
+                    if (stdev->is_streaming == 1)
+                        pthread_cond_signal(&stdev->tunnel_create);
                 } else {
                     ALOGE("%s: DSP is currently not streaming", __func__);
                 }
@@ -3681,6 +3736,7 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
 
         if (index != -1 && stdev->adnc_strm_handle[index] != 0) {
             //ALOGD("%s: soundtrigger HAL adnc_strm_read", __func__);
+            clock_gettime(CLOCK_REALTIME, &stdev->adnc_strm_last_read[index]);
             pthread_mutex_unlock(&stdev->lock);
             stdev->adnc_strm_read(stdev->adnc_strm_handle[index],
                                 config->u.aud_info.buf,
