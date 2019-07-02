@@ -2450,7 +2450,7 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         ret = start_sensor_model(stdev);
         if (ret) {
             ALOGE("%s: ERROR: Failed to start sensor model", __func__);
-            goto exit;
+            goto error;
         }
         stdev->models[i].kw_id = USELESS_KW_ID;
     } else if (check_uuid_equality(sound_model->vendor_uuid,
@@ -2458,13 +2458,13 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         ret = start_chre_model(stdev, i);
         if (ret) {
             ALOGE("%s: ERROR: Failed to start chre model", __func__);
-            goto exit;
+            goto error;
         }
         stdev->models[i].kw_id = USELESS_KW_ID;
     } else {
         ALOGE("%s: ERROR: unknown keyword model file", __func__);
         ret = -EINVAL;
-        goto exit;
+        goto error;
     }
 
     *handle = i;
@@ -2481,7 +2481,7 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
 
     stdev->models[i].is_loaded = true;
 
-exit:
+error:
     if (ret != 0) {
         if (stdev->models[i].data) {
             free(stdev->models[i].data);
@@ -2493,6 +2493,8 @@ exit:
             stdev->is_buffer_package_loaded = false;
         }
     }
+
+exit:
     pthread_mutex_unlock(&stdev->lock);
     ALOGD("-%s handle %d-", __func__, *handle);
     return ret;
