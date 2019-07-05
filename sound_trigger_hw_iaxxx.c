@@ -1543,32 +1543,19 @@ reload_oslo:
                 }
                 stdev->is_sensor_route_enabled = false;
 
-                if (stdev->is_sensor_destroy_in_prog == true) {
-                    stdev->is_sensor_destroy_in_prog = false;
-                    pthread_cond_signal(&stdev->sensor_create);
-
-                    // A timer would have been created during stop,
-                    // check and delete it, as there is nothing to destroy
-                    // at this point
-                    if (stdev->ss_timer_created) {
-                        timer_delete(stdev->ss_timer);
-                        stdev->ss_timer_created = false;
-                    }
-                } else {
-                    // setup the sensor route
-                    err = setup_sensor_package(stdev->odsp_hdl);
-                    if (err != 0) {
-                        ALOGE("%s: setup Sensor package failed", __func__);
-                        goto exit;
-                    }
-
-                    err = set_sensor_route(stdev->route_hdl, true);
-                    if (err != 0) {
-                        ALOGE("%s: Sensor route fail", __func__);
-                        goto exit;
-                    }
-                    stdev->is_sensor_route_enabled = true;
+                // setup the sensor route
+                err = setup_sensor_package(stdev->odsp_hdl);
+                if (err != 0) {
+                    ALOGE("%s: setup Sensor package failed", __func__);
+                    goto exit;
                 }
+
+                err = set_sensor_route(stdev->route_hdl, true);
+                if (err != 0) {
+                    ALOGE("%s: Sensor route fail", __func__);
+                    goto exit;
+                }
+                stdev->is_sensor_route_enabled = true;
             }
         }
     }
@@ -1597,6 +1584,39 @@ static int crash_recovery(struct knowles_sound_trigger_device *stdev)
 
 exit:
     return err;
+}
+
+static void crash_handler_oslo(struct knowles_sound_trigger_device *stdev)
+{
+    int i;
+
+    if (stdev->is_sensor_destroy_in_prog == false)
+        return;
+
+    if (stdev->ss_timer_created) {
+        timer_delete(stdev->ss_timer);
+        stdev->ss_timer_created = false;
+    }
+
+    if (stdev->is_sensor_route_enabled == true) {
+        for (i = 0; i < MAX_MODELS; i++) {
+            if (check_uuid_equality(stdev->models[i].uuid,
+                                    stdev->sensor_model_uuid)) {
+                stdev->models[i].is_loaded = false;
+                memset(&stdev->models[i].uuid, 0,
+                       sizeof(sound_trigger_uuid_t));
+                break;
+            }
+        }
+        stdev->is_sensor_route_enabled = false;
+        stdev->current_enable &= ~OSLO_MASK;
+    }
+    stdev->is_sensor_destroy_in_prog = false;
+
+    // There could be another thread waiting for us to destroy
+    // so signal that thread, if no one is waiting then this signal
+    // will have no effect
+    pthread_cond_signal(&stdev->sensor_create);
 }
 
 static void destroy_sensor_model(struct knowles_sound_trigger_device *stdev)
@@ -2138,7 +2158,8 @@ static void *callback_thread_loop(void *context)
                     stdev->is_st_hal_ready = false;
                     stdev->is_streaming = 0;
 
-                    // Firmware crashed, cancel CHRE timer and flags here
+                    // Firmware crashed, clear CHRE/Oslo timer and flags here
+                    crash_handler_oslo(stdev);
                     crash_handler_chre(stdev);
                 }
 
