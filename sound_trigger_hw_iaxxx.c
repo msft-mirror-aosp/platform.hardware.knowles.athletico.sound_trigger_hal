@@ -1586,7 +1586,7 @@ exit:
     return err;
 }
 
-static void crash_handler_oslo(struct knowles_sound_trigger_device *stdev)
+static void sensor_crash_handler(struct knowles_sound_trigger_device *stdev)
 {
     int i;
 
@@ -1601,7 +1601,8 @@ static void crash_handler_oslo(struct knowles_sound_trigger_device *stdev)
     if (stdev->is_sensor_route_enabled == true) {
         for (i = 0; i < MAX_MODELS; i++) {
             if (check_uuid_equality(stdev->models[i].uuid,
-                                    stdev->sensor_model_uuid)) {
+                                    stdev->sensor_model_uuid) &&
+                stdev->models[i].is_loaded == true) {
                 stdev->models[i].is_loaded = false;
                 memset(&stdev->models[i].uuid, 0,
                        sizeof(sound_trigger_uuid_t));
@@ -1642,7 +1643,8 @@ static void destroy_sensor_model(struct knowles_sound_trigger_device *stdev)
     // now we can change the flag
     for (i = 0 ; i < MAX_MODELS ; i++) {
         if (check_uuid_equality(stdev->models[i].uuid,
-                                stdev->sensor_model_uuid)) {
+                                stdev->sensor_model_uuid) &&
+            stdev->models[i].is_loaded == true) {
             memset(&stdev->models[i].uuid, 0, sizeof(sound_trigger_uuid_t));
             stdev->models[i].is_loaded = false;
             break;
@@ -1659,16 +1661,26 @@ static void destroy_sensor_model(struct knowles_sound_trigger_device *stdev)
     ALOGD("-%s-", __func__);
 }
 
-static void sensor_stop_timeout()
+static void sensor_timeout_recover()
 {
+    int err = 0;
     ALOGD("+%s+", __func__);
 
     struct knowles_sound_trigger_device *stdev = &g_stdev;
     pthread_mutex_lock(&stdev->lock);
     // We are here because we timed out so check if we still need to destroy
-    // the sensor package, if yes then go ahead otherwise do nothing
+    // the sensor package, if yes then reset the firmware
     if (stdev->is_sensor_destroy_in_prog == true) {
-        destroy_sensor_model(stdev);
+        if (stdev->is_st_hal_ready) {
+            stdev->is_st_hal_ready = false;
+            // reset the firmware and wait for firmware download complete
+            err = reset_fw(stdev->odsp_hdl);
+            if (err == -1) {
+                ALOGE("%s: ERROR: Failed to reset the firmware %d(%s)",
+                      __func__, errno, strerror(errno));
+            }
+            sensor_crash_handler(stdev);
+        }
     }
     pthread_mutex_unlock(&stdev->lock);
     ALOGD("-%s-", __func__);
@@ -1695,28 +1707,18 @@ static int start_sensor_model(struct knowles_sound_trigger_device * stdev)
         }
     }
 
-    // Reset timedout error
-    err = 0;
+    // If firmware crashed when we are waiting
+    if (stdev->is_st_hal_ready == false) {
+        err = -EAGAIN;
+        goto exit;
+    }
 
     if (stdev->is_sensor_destroy_in_prog == true) {
         ALOGE("%s: ERROR: Waited for %ds but we didn't get the event from "
-              "Host 1, forcing a destroy", __func__,
+              "Host 1, and fw reset is not yet complete", __func__,
               SENSOR_CREATE_WAIT_TIME_IN_S * SENSOR_CREATE_WAIT_MAX_COUNT);
-        stdev->is_sensor_destroy_in_prog = false;
-
-       if (stdev->is_sensor_route_enabled == true) {
-            err = set_sensor_route(stdev->route_hdl, false);
-            if (err) {
-                ALOGE("%s: Failed to tear sensor route", __func__);
-                goto exit;
-            }
-            err = destroy_sensor_package(stdev->odsp_hdl);
-            if (err) {
-                ALOGE("%s: ERROR: Failed to destroy sensor package", __func__);
-                goto exit;
-            }
-            stdev->is_sensor_route_enabled = false;
-        }
+        err = -EAGAIN;
+        goto exit;
     }
 
     // setup the sensor route
@@ -1747,7 +1749,7 @@ exit:
     return err;
 }
 
-static void crash_handler_chre(struct knowles_sound_trigger_device *stdev)
+static void chre_crash_handler(struct knowles_sound_trigger_device *stdev)
 {
     int i;
 
@@ -1762,7 +1764,8 @@ static void crash_handler_chre(struct knowles_sound_trigger_device *stdev)
     if (stdev->is_chre_route_enabled == true) {
         for (i = 0; i < MAX_MODELS; i++) {
             if (check_uuid_equality(stdev->models[i].uuid,
-                                    stdev->chre_model_uuid)) {
+                                    stdev->chre_model_uuid) &&
+                stdev->models[i].is_active == true) {
                 stdev->models[i].is_active = false;
                 stdev->models[i].is_loaded = false;
                 memset(&stdev->models[i].uuid, 0,
@@ -1811,22 +1814,10 @@ static int start_chre_model(struct knowles_sound_trigger_device *stdev,
 
     if (stdev->is_chre_destroy_in_prog == true) {
         ALOGE("%s: ERROR: Waited for %ds but we didn't get the event from "
-              "Host 1, forcing a destroy", __func__,
+              "Host 1, and fw reset is not yet complete", __func__,
               CHRE_CREATE_WAIT_TIME_IN_S * CHRE_CREATE_WAIT_MAX_COUNT);
-        stdev->is_chre_destroy_in_prog = false;
-        // Reset timedout error
-        err = 0;
-
-        if (stdev->is_chre_route_enabled == true) {
-            tear_chre_audio_route(stdev->route_hdl,
-                                  stdev->is_bargein_route_enabled);
-            err = destroy_chre_package(stdev->odsp_hdl);
-            if (err != 0) {
-                ALOGE("%s: ERROR: Failed to destroy chre package", __func__);
-                goto exit;
-            }
-            stdev->is_chre_route_enabled = false;
-        }
+        err = -EAGAIN;
+        goto exit;
     }
 
     // setup the sensor route
@@ -1875,7 +1866,8 @@ static void destroy_chre_model(struct knowles_sound_trigger_device *stdev)
         // now we can change the flag
         for (i = 0; i < MAX_MODELS; i++) {
             if (check_uuid_equality(stdev->models[i].uuid,
-                                    stdev->chre_model_uuid)) {
+                                    stdev->chre_model_uuid) &&
+                stdev->models[i].is_active == true) {
                 stdev->models[i].is_active = false;
                 stdev->models[i].is_loaded = false;
                 memset(&stdev->models[i].uuid, 0,
@@ -1903,16 +1895,26 @@ static void destroy_chre_model(struct knowles_sound_trigger_device *stdev)
     ALOGD("-%s-", __func__);
 }
 
-static void chre_stop_timeout()
+static void chre_timeout_recover()
 {
+    int err = 0;
     ALOGD("+%s+", __func__);
 
     struct knowles_sound_trigger_device *stdev = &g_stdev;
     pthread_mutex_lock(&stdev->lock);
     // We are here because we timed out so check if we still need to destroy
-    // the chre package, if yes then go ahead otherwise do nothing
+    // the chre package, if yes then reset the firmware
     if (stdev->is_chre_destroy_in_prog == true) {
-        destroy_chre_model(stdev);
+        if (stdev->is_st_hal_ready) {
+            stdev->is_st_hal_ready = false;
+            // reset the firmware and wait for firmware download complete
+            err = reset_fw(stdev->odsp_hdl);
+            if (err == -1) {
+                ALOGE("%s: ERROR: Failed to reset the firmware %d(%s)",
+                      __func__, errno, strerror(errno));
+            }
+            chre_crash_handler(stdev);
+        }
     }
     pthread_mutex_unlock(&stdev->lock);
     ALOGD("-%s-", __func__);
@@ -2077,32 +2079,31 @@ static void *callback_thread_loop(void *context)
                             ALOGD("Eventid received is OSLO_EP_DISCONNECT %d",
                                   OSLO_EP_DISCONNECT);
                             if (stdev->is_sensor_destroy_in_prog == true) {
-                                destroy_sensor_model(stdev);
-
                                 // A timer would have been created during stop,
                                 // check and delete it
                                 if (stdev->ss_timer_created) {
                                     timer_delete(stdev->ss_timer);
                                     stdev->ss_timer_created = false;
                                 }
+
+                                destroy_sensor_model(stdev);
                             } else {
                                 ALOGE("Unexpected OSLO_EP_DISCONNECT received"
                                       ", ignoring..");
                             }
-
                             break;
                         } else if (ge.event_id == CHRE_EP_DISCONNECT) {
                             ALOGD("Eventid received is CHRE_EP_DISCONNECT %d",
                                   CHRE_EP_DISCONNECT);
                             if (stdev->is_chre_destroy_in_prog == true) {
-                                destroy_chre_model(stdev);
-
                                 // A timer would have been created during stop,
                                 // check and delete it
                                 if (stdev->chre_timer_created) {
                                     timer_delete(stdev->chre_timer);
                                     stdev->chre_timer_created = false;
                                 }
+
+                                destroy_chre_model(stdev);
                             } else {
                                 ALOGE("Unexpected CHRE_EP_DISCONNECT received"
                                       ", ignoring..");
@@ -2159,8 +2160,8 @@ static void *callback_thread_loop(void *context)
                     stdev->is_streaming = 0;
 
                     // Firmware crashed, clear CHRE/Oslo timer and flags here
-                    crash_handler_oslo(stdev);
-                    crash_handler_chre(stdev);
+                    sensor_crash_handler(stdev);
+                    chre_crash_handler(stdev);
                 }
 
                 i += strlen(msg + i) + 1;
@@ -2566,7 +2567,7 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
 
             // Start timer for 5 seconds
             ss_sigevent.sigev_notify = SIGEV_THREAD;
-            ss_sigevent.sigev_notify_function = sensor_stop_timeout;
+            ss_sigevent.sigev_notify_function = sensor_timeout_recover;
             ss_sigevent.sigev_notify_attributes = NULL;
 
             ss_timer_spec.it_interval.tv_sec = 0;
@@ -2608,7 +2609,7 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
 
             // Start timer for 5 seconds
             chre_sigevent.sigev_notify = SIGEV_THREAD;
-            chre_sigevent.sigev_notify_function = chre_stop_timeout;
+            chre_sigevent.sigev_notify_function = chre_timeout_recover;
             chre_sigevent.sigev_notify_attributes = NULL;
 
             chre_timer_spec.it_interval.tv_sec = 0;
