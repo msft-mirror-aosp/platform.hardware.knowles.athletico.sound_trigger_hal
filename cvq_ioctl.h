@@ -54,6 +54,7 @@
 #define SENSOR_PRESENCE_MODE    0
 #define SENSOR_DETECTED_MODE    1
 #define SENSOR_MAX_MODE         2
+#define OSLO_DATA_EVENT_ID      1
 #define OSLO_CONFIGURED         (0x201)
 #define OSLO_DESTROYED          (0x202)
 #define OSLO_EP_DISCONNECT      (0x205)
@@ -73,6 +74,9 @@
 #define CHRE_CONFIGURED      (0x203)
 #define CHRE_DESTROYED       (0x204)
 #define CHRE_EVT_MASK        (0x1f)
+
+#define IAXXX_SYSID_CTRL_MGR_CM4 0x2610
+#define IAXXX_HOST1_WAKEUP_EVENT_ID 4
 
 #define MIXER_PKG_ID       5
 #define MIXER_PLUGIN_IDX   0
@@ -227,5 +231,5 @@ int get_fw_status(struct iaxxx_odsp_hw *odsp_hdl, unsigned int *status);
 int reset_fw(struct iaxxx_odsp_hw *odsp_hdl);
 int trigger_sensor_destroy_event(struct iaxxx_odsp_hw *odsp_hdl);
 int trigger_chre_destroy_event(struct iaxxx_odsp_hw *odsp_hdl);
-
+int setup_slpi_wakeup_event(struct iaxxx_odsp_hw *odsp_hdl, bool enabled);
 #endif /* _CVQ_IOCTL_H */
