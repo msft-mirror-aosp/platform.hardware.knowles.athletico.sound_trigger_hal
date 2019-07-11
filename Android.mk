@@ -28,7 +28,8 @@ LOCAL_SHARED_LIBRARIES := liblog \
 			libcutils \
 			libtinyalsa \
 			libaudioroute \
-			libodsp
+			libodsp \
+			libhardware_legacy
 LOCAL_MODULE_TAGS := optional
 ifneq (,$(findstring $(PLATFORM_VERSION), P))
 LOCAL_PROPRIETARY_MODULE := true
