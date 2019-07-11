@@ -3320,6 +3320,14 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         // get previous mode
         pre_mode = get_sthal_mode(stdev);
 
+        if (stdev->is_in_voice_voip_mode == false &&
+            stdev->is_voice_voip_stop == true &&
+            stdev->is_media_recording == true) {
+            ALOGD("%s: voice/voip didn't start, treat it as media recording inactive", __func__);
+            stdev->is_voice_voip_stop = false;
+            stdev->is_media_recording = false;
+        }
+
         // update conditions
         if (stdev->is_voice_voip_stop == true) {
             ALOGD("%s: voice/voip device is inactive",
