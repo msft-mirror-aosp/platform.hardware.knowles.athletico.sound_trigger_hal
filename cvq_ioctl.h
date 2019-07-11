@@ -168,6 +168,11 @@ enum sthal_mode {
     CON_ENABLED_CAPTURE_ST
 };
 
+typedef enum {
+    TRANSIT_NONE,
+    TRANSIT_SETUP_AEC
+} transit_case_t;
+
 #define PLUGIN_DEF_CONFIG_ID    0
 
 int write_model(struct iaxxx_odsp_hw *odsp_hdl, unsigned char *data,
