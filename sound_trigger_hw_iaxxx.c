@@ -35,6 +35,7 @@
 #include <sys/timerfd.h>
 
 #include <hardware/hardware.h>
+#include <hardware_legacy/power.h>
 
 #include "cvq_ioctl.h"
 #include "sound_trigger_hw_iaxxx.h"
@@ -64,6 +65,8 @@
 #define IAXXX_RECOVERY_EVENT_STR    "IAXXX_RECOVERY_EVENT"
 #define IAXXX_FW_DWNLD_SUCCESS_STR  "IAXXX_FW_DWNLD_SUCCESS"
 #define IAXXX_FW_CRASH_EVENT_STR    "IAXXX_CRASH_EVENT"
+
+#define WAKE_LOCK_NAME "sthal_wake_lock"
 
 #define CARD_NAME                          "iaxxx"
 #define SOUND_TRIGGER_MIXER_PATH_BASE      "/vendor/etc/sound_trigger_mixer_paths"
@@ -130,7 +133,9 @@ struct knowles_sound_trigger_device {
     sound_trigger_uuid_t authkw_model_uuid;
     pthread_t callback_thread;
     pthread_t monitor_thread;
+    pthread_t transitions_thread;
     pthread_mutex_t lock;
+    pthread_cond_t transition_cond;
     pthread_cond_t tunnel_create;
     pthread_cond_t sensor_create;
     pthread_cond_t chre_create;
@@ -178,6 +183,7 @@ struct knowles_sound_trigger_device {
 
     unsigned int current_enable;
     unsigned int recover_model_list;
+    transit_case_t transit_case;
 
     struct audio_route *route_hdl;
     struct mixer *mixer;
@@ -1027,6 +1033,118 @@ static int tear_package_route(struct knowles_sound_trigger_device *stdev,
             tear_ambient_route(stdev->route_hdl, bargein);
     }
 
+    return ret;
+}
+
+static int async_setup_aec(struct knowles_sound_trigger_device *stdev)
+{
+    int ret = 0;
+    if (stdev->is_music_playing == true &&
+        stdev->is_bargein_route_enabled != true) {
+        ALOGD("%s: Bargein enable", __func__);
+        if (is_mic_controlled_by_audhal(stdev) == false) {
+            ret = enable_mic_route(stdev->route_hdl, false,
+                                INTERNAL_OSCILLATOR);
+            if (ret != 0) {
+                ALOGE("Failed to disable mic route with INT OSC");
+                goto exit;
+            }
+            ret = enable_mic_route(stdev->route_hdl, true,
+                                EXTERNAL_OSCILLATOR);
+            if (ret != 0) {
+                ALOGE("Failed to enable mic route with EXT OSC");
+                goto exit;
+            }
+            ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_16K);
+            if (ret != 0) {
+                ALOGE("Failed to enable amp-ref route");
+                goto exit;
+            }
+        } else {
+            // main mic is turned by media recording
+            ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_48K);
+            if (ret != 0) {
+                ALOGE("Failed to enable amp-ref route");
+                goto exit;
+            }
+        }
+        ret = setup_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
+        if (ret != 0) {
+            ALOGE("Failed to load SRC-amp package");
+            goto exit;
+        }
+        ret = enable_src_route(stdev->route_hdl, true, SRC_AMP_REF);
+        if (ret != 0) {
+            ALOGE("Failed to enable SRC-amp route");
+            goto exit;
+        }
+
+        ret = setup_aec_package(stdev->odsp_hdl);
+        if (ret != 0) {
+            ALOGE("Failed to load AEC package");
+            goto exit;
+        }
+        ret = enable_bargein_route(stdev->route_hdl, true);
+        if (ret != 0) {
+            ALOGE("Failed to enable buffer route");
+            goto exit;
+        }
+        stdev->is_bargein_route_enabled = true;
+
+        if (stdev->hotword_buffer_enable) {
+            ret = tear_hotword_buffer_route(stdev->route_hdl,
+                                !stdev->is_bargein_route_enabled);
+            if (ret != 0) {
+                ALOGE("Failed to tear old buffer route");
+                goto exit;
+            }
+            ret = set_hotword_buffer_route(stdev->route_hdl,
+                                stdev->is_bargein_route_enabled);
+            if (ret != 0) {
+                ALOGE("Failed to enable buffer route");
+                goto exit;
+            }
+        }
+
+        if (stdev->music_buffer_enable) {
+            ret = tear_music_buffer_route(stdev->route_hdl,
+                                !stdev->is_bargein_route_enabled);
+            if (ret != 0) {
+                ALOGE("Failed to tear old music buffer route");
+                goto exit;
+            }
+            ret = set_music_buffer_route(stdev->route_hdl,
+                                stdev->is_bargein_route_enabled);
+            if (ret != 0) {
+                ALOGE("Failed to enable buffer route");
+                goto exit;
+            }
+        }
+
+        // Check each model, if it is active then update it's route
+        for (int i = 0; i < MAX_MODELS; i++) {
+            if (stdev->models[i].is_active == true) {
+                // teardown the package route without bargein
+                ret = tear_package_route(stdev,
+                                        stdev->models[i].uuid,
+                                        !stdev->is_bargein_route_enabled);
+                if (ret != 0) {
+                    ALOGE("Failed to tear old package route");
+                    goto exit;
+                }
+                // resetup the package route with bargein
+                ret = set_package_route(stdev,
+                                        stdev->models[i].uuid,
+                                        stdev->is_bargein_route_enabled);
+                if (ret != 0) {
+                    ALOGE("Failed to enable package route");
+                    goto exit;
+                }
+            }
+        }
+    }
+
+exit:
     return ret;
 }
 
@@ -1921,6 +2039,32 @@ static void chre_timeout_recover()
     ALOGD("-%s-", __func__);
 }
 
+static void *transitions_thread_loop(void *context)
+{
+    struct knowles_sound_trigger_device *stdev =
+        (struct knowles_sound_trigger_device *)context;
+
+    int err = 0;
+    pthread_mutex_lock(&stdev->lock);
+    while (1) {
+            if (stdev->transit_case == TRANSIT_NONE)
+                pthread_cond_wait(&stdev->transition_cond, &stdev->lock);
+
+            acquire_wake_lock(PARTIAL_WAKE_LOCK, WAKE_LOCK_NAME);
+            switch (stdev->transit_case) {
+                case TRANSIT_NONE:
+                    break;
+                case TRANSIT_SETUP_AEC:
+                    err = async_setup_aec(stdev);
+                    break;
+            }
+            stdev->transit_case = TRANSIT_NONE;
+            release_wake_lock(WAKE_LOCK_NAME);
+    }
+    pthread_mutex_unlock(&stdev->lock);
+}
+
+
 static void *monitor_thread_loop(void *context)
 {
     struct knowles_sound_trigger_device *stdev =
@@ -1938,6 +2082,7 @@ static void *monitor_thread_loop(void *context)
 
             pthread_mutex_lock(&stdev->lock);
 
+            acquire_wake_lock(PARTIAL_WAKE_LOCK, WAKE_LOCK_NAME);
             clock_gettime(CLOCK_REALTIME, &now);
             for (int i = 0; i < MAX_MODELS; i++) {
                 if (stdev->adnc_strm_handle[i] != 0) {
@@ -1954,6 +2099,7 @@ static void *monitor_thread_loop(void *context)
                     }
                 }
             }
+            release_wake_lock(WAKE_LOCK_NAME);
     }
     pthread_mutex_unlock(&stdev->lock);
 }
@@ -3265,6 +3411,9 @@ static int stdev_open(const hw_module_t *module, const char *name,
     pthread_create(&stdev->monitor_thread, (const pthread_attr_t *) NULL,
                 monitor_thread_loop, stdev);
 
+    pthread_create(&stdev->transitions_thread, (const pthread_attr_t *) NULL,
+                transitions_thread_loop, stdev);
+
     *device = &stdev->device.common; /* same address as stdev */
 exit:
     pthread_mutex_unlock(&stdev->lock);
@@ -3319,6 +3468,14 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
 
         // get previous mode
         pre_mode = get_sthal_mode(stdev);
+
+        if (stdev->is_in_voice_voip_mode == false &&
+            stdev->is_voice_voip_stop == true &&
+            stdev->is_media_recording == true) {
+            ALOGD("%s: voice/voip didn't start, treat it as media recording inactive", __func__);
+            stdev->is_voice_voip_stop = false;
+            stdev->is_media_recording = false;
+        }
 
         // update conditions
         if (stdev->is_voice_voip_stop == true) {
@@ -3550,109 +3707,8 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                 // Atleast one keyword model is active so update the routes
                 // Check if the bargein route is enabled if not enable bargein route
                 // Check each model, if it is active then update it's route
-                if (stdev->is_bargein_route_enabled != true) {
-                    ALOGD("Bargein enable");
-                    if (is_mic_controlled_by_audhal(stdev) == false) {
-                        ret = enable_mic_route(stdev->route_hdl, false,
-                                            INTERNAL_OSCILLATOR);
-                        if (ret != 0) {
-                            ALOGE("Failed to disable mic route with INT OSC");
-                            goto exit;
-                        }
-                        ret = enable_mic_route(stdev->route_hdl, true,
-                                            EXTERNAL_OSCILLATOR);
-                        if (ret != 0) {
-                            ALOGE("Failed to enable mic route with EXT OSC");
-                            goto exit;
-                        }
-                        ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_16K);
-                        if (ret != 0) {
-                            ALOGE("Failed to enable amp-ref route");
-                            goto exit;
-                        }
-                    } else {
-                        // main mic is turned by media recording
-                        ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_48K);
-                        if (ret != 0) {
-                            ALOGE("Failed to enable amp-ref route");
-                            goto exit;
-                        }
-                    }
-                    ret = setup_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
-                    if (ret != 0) {
-                        ALOGE("Failed to load SRC-amp package");
-                        goto exit;
-                    }
-                    ret = enable_src_route(stdev->route_hdl, true, SRC_AMP_REF);
-                    if (ret != 0) {
-                        ALOGE("Failed to enable SRC-amp route");
-                        goto exit;
-                    }
-
-                    ret = setup_aec_package(stdev->odsp_hdl);
-                    if (ret != 0) {
-                        ALOGE("Failed to load AEC package");
-                        goto exit;
-                    }
-                    ret = enable_bargein_route(stdev->route_hdl, true);
-                    if (ret != 0) {
-                        ALOGE("Failed to enable buffer route");
-                        goto exit;
-                    }
-                    stdev->is_bargein_route_enabled = true;
-
-                    if (stdev->hotword_buffer_enable) {
-                        ret = tear_hotword_buffer_route(stdev->route_hdl,
-                                            !stdev->is_bargein_route_enabled);
-                        if (ret != 0) {
-                            ALOGE("Failed to tear old buffer route");
-                            goto exit;
-                        }
-                        ret = set_hotword_buffer_route(stdev->route_hdl,
-                                            stdev->is_bargein_route_enabled);
-                        if (ret != 0) {
-                            ALOGE("Failed to enable buffer route");
-                            goto exit;
-                        }
-                    }
-
-                    if (stdev->music_buffer_enable) {
-                        ret = tear_music_buffer_route(stdev->route_hdl,
-                                            !stdev->is_bargein_route_enabled);
-                        if (ret != 0) {
-                            ALOGE("Failed to tear old music buffer route");
-                            goto exit;
-                        }
-                        ret = set_music_buffer_route(stdev->route_hdl,
-                                            stdev->is_bargein_route_enabled);
-                        if (ret != 0) {
-                            ALOGE("Failed to enable buffer route");
-                            goto exit;
-                        }
-                    }
-
-                    // Check each model, if it is active then update it's route
-                    for (i = 0; i < MAX_MODELS; i++) {
-                        if (stdev->models[i].is_active == true) {
-                            // teardown the package route without bargein
-                            ret = tear_package_route(stdev,
-                                                    stdev->models[i].uuid,
-                                                    !stdev->is_bargein_route_enabled);
-                            if (ret != 0) {
-                                ALOGE("Failed to tear old package route");
-                                goto exit;
-                            }
-                            // resetup the package route with bargein
-                            ret = set_package_route(stdev,
-                                                    stdev->models[i].uuid,
-                                                    stdev->is_bargein_route_enabled);
-                            if (ret != 0) {
-                                ALOGE("Failed to enable package route");
-                                goto exit;
-                            }
-                        }
-                    }
-                }
+                stdev->transit_case = TRANSIT_SETUP_AEC;
+                pthread_cond_signal(&stdev->transition_cond);
             }
         } else {
             ALOGD("%s: STHAL setup playback active alrealy", __func__);
