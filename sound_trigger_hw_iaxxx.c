@@ -1040,7 +1040,8 @@ static int async_setup_aec(struct knowles_sound_trigger_device *stdev)
 {
     int ret = 0;
     if (stdev->is_music_playing == true &&
-        stdev->is_bargein_route_enabled != true) {
+        stdev->is_bargein_route_enabled != true &&
+        stdev->is_mic_route_enabled != false) {
         ALOGD("%s: Bargein enable", __func__);
         if (is_mic_controlled_by_audhal(stdev) == false) {
             ret = enable_mic_route(stdev->route_hdl, false,
