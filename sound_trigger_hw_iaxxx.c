@@ -1040,31 +1040,14 @@ static int async_setup_aec(struct knowles_sound_trigger_device *stdev)
 {
     int ret = 0;
     if (stdev->is_music_playing == true &&
-        stdev->is_bargein_route_enabled != true) {
+        stdev->is_bargein_route_enabled != true &&
+        stdev->is_mic_route_enabled != false) {
         ALOGD("%s: Bargein enable", __func__);
         if (is_mic_controlled_by_audhal(stdev) == false) {
             ret = enable_mic_route(stdev->route_hdl, false,
                                 INTERNAL_OSCILLATOR);
             if (ret != 0) {
                 ALOGE("Failed to disable mic route with INT OSC");
-                goto exit;
-            }
-            ret = enable_mic_route(stdev->route_hdl, true,
-                                EXTERNAL_OSCILLATOR);
-            if (ret != 0) {
-                ALOGE("Failed to enable mic route with EXT OSC");
-                goto exit;
-            }
-            ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_16K);
-            if (ret != 0) {
-                ALOGE("Failed to enable amp-ref route");
-                goto exit;
-            }
-        } else {
-            // main mic is turned by media recording
-            ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_48K);
-            if (ret != 0) {
-                ALOGE("Failed to enable amp-ref route");
                 goto exit;
             }
         }
@@ -1088,6 +1071,27 @@ static int async_setup_aec(struct knowles_sound_trigger_device *stdev)
         if (ret != 0) {
             ALOGE("Failed to enable buffer route");
             goto exit;
+        }
+
+        if (is_mic_controlled_by_audhal(stdev) == false) {
+            ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_16K);
+            if (ret != 0) {
+                ALOGE("Failed to enable amp-ref route");
+                goto exit;
+            }
+            ret = enable_mic_route(stdev->route_hdl, true,
+                                EXTERNAL_OSCILLATOR);
+            if (ret != 0) {
+                ALOGE("Failed to enable mic route with EXT OSC");
+                goto exit;
+            }
+        } else {
+            // main mic is turned by media recording
+            ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_48K);
+            if (ret != 0) {
+                ALOGE("Failed to enable amp-ref route");
+                goto exit;
+            }
         }
         stdev->is_bargein_route_enabled = true;
 
@@ -1174,13 +1178,6 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
                 ALOGE("Fail to setup src Package");
                 goto exit;
             }
-            if (is_mic_controlled_by_audhal(stdev) == false) {
-                err = enable_mic_route(stdev->route_hdl, true, ct);
-                if (err != 0) {
-                    ALOGE("Failed to enable mic route");
-                    goto exit;
-                }
-            }
             err = setup_src_plugin(stdev->odsp_hdl, SRC_MIC);
             if (err != 0) {
                 ALOGE("Failed to load SRC package");
@@ -1191,17 +1188,9 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
                 ALOGE("Failed to enable SRC-mic route");
                 goto exit;
             }
-
-            stdev->is_mic_route_enabled = true;
         }
         if (stdev->is_music_playing == true &&
             stdev->is_bargein_route_enabled == false) {
-
-            err = enable_amp_ref_route(stdev->route_hdl, true, strmt);
-            if (err != 0) {
-                ALOGE("Failed to amp-ref route");
-                goto exit;
-            }
             err = setup_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
             if (err != 0) {
                 ALOGE("Failed to load SRC-amp package");
@@ -1226,7 +1215,22 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
                 ALOGE("Failed to enable buffer route");
                 goto exit;
             }
+            err = enable_amp_ref_route(stdev->route_hdl, true, strmt);
+            if (err != 0) {
+                ALOGE("Failed to amp-ref route");
+                goto exit;
+            }
             stdev->is_bargein_route_enabled = true;
+        }
+        if (stdev->is_mic_route_enabled == false) {
+            if (is_mic_controlled_by_audhal(stdev) == false) {
+                err = enable_mic_route(stdev->route_hdl, true, ct);
+                if (err != 0) {
+                    ALOGE("Failed to enable mic route");
+                    goto exit;
+                }
+            }
+            stdev->is_mic_route_enabled = true;
         }
     } else {
         if (!is_any_model_active(stdev)) {
@@ -1512,7 +1516,7 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
             }
             err = enable_src_route(stdev->route_hdl, false, SRC_AMP_REF);
             if (err != 0) {
-                ALOGE("Failed to tear SRC-mic route");
+                ALOGE("Failed to tear SRC-amp route");
             }
             err = enable_bargein_route(stdev->route_hdl, false);
             if (err != 0) {
@@ -1543,58 +1547,22 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
      * If sound trigger recording isn't active, then we don't need to
      * recover src package.
      */
-    if (stdev->is_mic_route_enabled == true) {
-        if (is_mic_controlled_by_audhal(stdev) == false) {
-            err = enable_mic_route(stdev->route_hdl, false, ct);
-            if (err != 0) {
-                ALOGE("failed to tear mic route");
-            }
-            err = enable_mic_route(stdev->route_hdl, true, ct);
-            if (err != 0) {
-                ALOGE("failed to restart mic route");
-            }
-        }
-
-        // recover src package if sound trigger recording is active
-        err = setup_src_plugin(stdev->odsp_hdl, SRC_MIC);
-        if (err != 0) {
-            ALOGE("failed to load SRC package");
-        }
-        err = enable_src_route(stdev->route_hdl, false, SRC_MIC);
-        if (err != 0) {
-            ALOGE("Failed to tear SRC-mic route");
-        }
-        err = enable_src_route(stdev->route_hdl, true, SRC_MIC);
-        if (err != 0) {
-            ALOGE("Failed to restart SRC-mic route");
-        }
-    }
-
     if (stdev->is_music_playing == true &&
         stdev->is_bargein_route_enabled == true) {
         if (is_mic_controlled_by_audhal(stdev) == true) {
             strmt = STRM_48K;
         }
-        err = enable_amp_ref_route(stdev->route_hdl, false, strmt);
-        if (err != 0) {
-            ALOGE("Failed to tear amp-ref route");
-        }
-        err = enable_amp_ref_route(stdev->route_hdl, true, strmt);
-        if (err != 0) {
-            ALOGE("Failed to restart amp-ref route");
-        }
-
         err = setup_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
         if (err != 0) {
             ALOGE("failed to load SRC package");
         }
         err = enable_src_route(stdev->route_hdl, false, SRC_AMP_REF);
         if (err != 0) {
-            ALOGE("Failed to tear SRC-mic route");
+            ALOGE("Failed to tear SRC-amp route");
         }
         err = enable_src_route(stdev->route_hdl, true, SRC_AMP_REF);
         if (err != 0) {
-            ALOGE("Failed to restart SRC-mic route");
+            ALOGE("Failed to restart SRC-amp route");
         }
 
         err = setup_aec_package(stdev->odsp_hdl);
@@ -1608,6 +1576,41 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
         err = enable_bargein_route(stdev->route_hdl, true);
         if (err != 0) {
             ALOGE("Failed to restart bargein route");
+        }
+        err = enable_amp_ref_route(stdev->route_hdl, false, strmt);
+        if (err != 0) {
+            ALOGE("Failed to tear amp-ref route");
+        }
+        err = enable_amp_ref_route(stdev->route_hdl, true, strmt);
+        if (err != 0) {
+            ALOGE("Failed to restart amp-ref route");
+        }
+    }
+
+    if (stdev->is_mic_route_enabled == true) {
+        // recover src package if sound trigger recording is active
+        err = setup_src_plugin(stdev->odsp_hdl, SRC_MIC);
+        if (err != 0) {
+            ALOGE("failed to load SRC package");
+        }
+        err = enable_src_route(stdev->route_hdl, false, SRC_MIC);
+        if (err != 0) {
+            ALOGE("Failed to tear SRC-mic route");
+        }
+        err = enable_src_route(stdev->route_hdl, true, SRC_MIC);
+        if (err != 0) {
+            ALOGE("Failed to restart SRC-mic route");
+        }
+
+        if (is_mic_controlled_by_audhal(stdev) == false) {
+            err = enable_mic_route(stdev->route_hdl, false, ct);
+            if (err != 0) {
+                ALOGE("failed to tear mic route");
+            }
+            err = enable_mic_route(stdev->route_hdl, true, ct);
+            if (err != 0) {
+                ALOGE("failed to restart mic route");
+            }
         }
     }
 
