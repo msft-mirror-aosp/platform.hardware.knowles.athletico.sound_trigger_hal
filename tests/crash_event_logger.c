@@ -29,6 +29,7 @@
 #define LOG_TAG "ia_crash_event_logger"
 #include <cutils/log.h>
 #include <cutils/uevent.h>
+#include "crash_analyzer.h"
 
 #define UEVENT_MSG_LEN          (1024)
 #define BUF_SIZE                (4096)
@@ -36,10 +37,13 @@
 #define REGDUMP_LOGGER_DEV	"/dev/regdump"
 #define CRASH_DUMP_FILE_PREFIX  "/data/data/dump_crash_"
 #define REG_ACCESS_FILE_PREFIX	"/data/data/dump_reg_access_history_"
+#define CRASH_REASON_FILE_PREFIX  "/data/data/dump_crash_reason_"
+#define SSR_CRASH_REASON_PREFIX  "ia_dump_crash_reason_"
 #define BIN_EXTN                ".bin"
 #define TXT_EXTN                ".txt"
 #define MAX_FILENAME_LEN        512
 #define MAX_TIMESTR_LEN         64
+#define CRASH_DUMP_ANALYZER_MAX_STR_LEN  512
 
 #define SSR_RAMDUMP_PREFIX      "ramdump_audio_codec_"
 #define SSR_CRASH_FILE_PREFIX   "ia_crash_dump_"
@@ -64,6 +68,7 @@ char *crash_dump_split_file_names[] =
     "/data/data/dump_crash_SSP_RAM0_",
     "/data/data/dump_crash_SSP_RAM1_",
     "/data/data/dump_crash_SSP_ROM0_",
+    CRASH_REASON_FILE_PREFIX
     };
 
 char *ssr_crash_dump_split_file_names[] = {
@@ -76,41 +81,114 @@ char *ssr_crash_dump_split_file_names[] = {
     "ia_dump_crash_SSP_RAM0_",
     "ia_dump_crash_SSP_RAM1_",
     "ia_dump_crash_SSP_ROM0_",
+    SSR_CRASH_REASON_PREFIX
 };
 
-int split_bin(unsigned char *buf, int len, const char* time_stamp)
+void dump_crash_reason(const unsigned char *crash_dump_buf,
+                       const int crash_dump_len,
+                       const unsigned char *crash_reason_buf,
+                       const int crash_reason_len,
+                       const char *time_stamp, bool is_ssr)
 {
-    unsigned int header, size, tot_len, flen;
+
+    FILE *out_fp = NULL;
+    char file_name[MAX_FILENAME_LEN] = {0};
+    char crash_dump_analyzer_str[CRASH_DUMP_ANALYZER_MAX_STR_LEN] = {0};
+    int len = 0;
+    const char *crash_dump_title = " crash_analysis:";
+
+    if (is_ssr) {
+        snprintf(file_name, MAX_FILENAME_LEN, "%s%s%s%s%s",
+                 SSR_DUMP_PATH, SSR_RAMDUMP_PREFIX,
+                 SSR_CRASH_REASON_PREFIX,
+                 time_stamp, BIN_EXTN);
+    } else {
+        snprintf(file_name, MAX_FILENAME_LEN, "%s%s%s",
+                 CRASH_REASON_FILE_PREFIX, time_stamp,
+                 TXT_EXTN);
+    }
+
+    out_fp = fopen(file_name, "w");
+    if (out_fp == NULL) {
+        ALOGE("Failed to open %s for writting", file_name);
+        goto exit;
+    }
+
+    len = strnlen((const char *)crash_reason_buf, crash_reason_len);
+
+    if (fwrite(crash_reason_buf, 1, len, out_fp) != len) {
+        ALOGE("%s: ERROR writing to CRASH REASON FILE", __func__);
+        goto exit;
+    }
+
+    len = analyse_crash_info(
+            crash_dump_buf, crash_dump_len, crash_dump_analyzer_str,
+            CRASH_DUMP_ANALYZER_MAX_STR_LEN);
+    if (len > 0) {
+        fwrite(crash_dump_title, 1, strlen(crash_dump_title), out_fp);
+        fwrite(crash_dump_analyzer_str, 1,
+                strlen(crash_dump_analyzer_str), out_fp);
+    }
+    ALOGI("Crash logs saved to %s", file_name);
+exit:
+    if (out_fp != NULL) {
+        fclose(out_fp);
+    }
+
+}
+
+int split_crash_dump_buffer(unsigned char *buf, const int len,
+                            const char* time_stamp)
+{
+
+    unsigned int file_index = 0, size = 0, tot_len = 0, flen = 0;
     int fcount = 0;
-    unsigned char *ptr;
-    FILE *fp;
-    char file_name[MAX_FILENAME_LEN];
-    int no_crashdump_files = sizeof(crash_dump_split_file_names) /
+    unsigned char *ptr = NULL;
+    FILE *fp = NULL;
+    char file_name[MAX_FILENAME_LEN] = {0};
+    int number_crashdump_files = sizeof(crash_dump_split_file_names) /
             sizeof(crash_dump_split_file_names[0]);
 
-    tot_len = 0;
-    while ((tot_len < len) && (fcount++ < no_crashdump_files))
-    {
-        header = buf[tot_len] ;
+    if (buf == NULL || time_stamp == NULL || len <= 0) {
+        ALOGE("%s: Bad parameters", __func__);
+        return -1;
+    }
 
-        size = buf[tot_len+8] |
-                buf[tot_len+9]  << 8  |
-                buf[tot_len+10] << 16 |
-                buf[tot_len+11] << 24 ;
+    while ((tot_len + STEP_LENGTH - 1 < len) &&
+           (fcount++ < number_crashdump_files)) {
+        file_index = buf[tot_len];
 
-        tot_len += 12;
+        size = buf[tot_len + 8] |
+               buf[tot_len + 9] << 8 |
+               buf[tot_len + 10] << 16 |
+               buf[tot_len + 11] << 24;
 
-        strcpy(file_name, crash_dump_split_file_names[header & 0xf]);
-        strcat(file_name, time_stamp);
-        strcat(file_name, BIN_EXTN);
+        tot_len += STEP_LENGTH;
 
-        fp = fopen (file_name, "w+");
+        if (file_index >= number_crashdump_files || size > len - tot_len) {
+            continue;
+        }
 
-        ptr = buf + tot_len;
-        flen = fwrite(ptr , 1, size, fp);
-        tot_len += size;
-        fclose(fp);
-        ALOGI("Crash logs saved to %s", file_name);
+        /* Some special handling is needed for crash reason file */
+        if (!strcmp(crash_dump_split_file_names[file_index],
+                CRASH_REASON_FILE_PREFIX)) {
+            dump_crash_reason(buf, len, buf + tot_len, size, time_stamp,
+                              false);
+        }
+        else {
+            snprintf(file_name, MAX_FILENAME_LEN, "%s%s%s",
+                     crash_dump_split_file_names[file_index],
+                     time_stamp, BIN_EXTN);
+
+            fp = fopen(file_name, "w+");
+
+            ptr = buf + tot_len;
+
+            flen = fwrite(ptr , 1, size, fp);
+            tot_len += size;
+            fclose(fp);
+            ALOGI("Crash logs saved to %s", file_name);
+        }
     }
     return 0;
 }
@@ -148,7 +226,7 @@ int split_crash_dump_file (const char* crash_dump_filename,
         ret = -1;
         goto exit;
     }
-    ret = split_bin(buf, len, time_stamp);
+    ret = split_crash_dump_buffer(buf, len, time_stamp);
 
 exit:
     if (fp)
@@ -285,27 +363,45 @@ exit:
 
 /* --- functions for SSR detector ---*/
 int ssr_split_bin(unsigned char *buf, int len, const char* time_stamp) {
-    unsigned int header = 0, size = 0, tot_len = 0, flen = 0;
+    unsigned int file_index = 0, size = 0, tot_len = 0, flen = 0;
     unsigned char *ptr = NULL;
-    char file_name[MAX_FILENAME_LEN];
+    char file_name[MAX_FILENAME_LEN] = {0};
     FILE *fp = NULL;
     int fcount = 0;
-    int no_crashdump_files = sizeof(ssr_crash_dump_split_file_names) /
+    int number_crashdump_files = sizeof(ssr_crash_dump_split_file_names) /
             sizeof(ssr_crash_dump_split_file_names[0]);
 
-    while ((tot_len < len) && (fcount++ < no_crashdump_files)) {
-        header = buf[tot_len];
+    if (buf == NULL || time_stamp == NULL || len <= 0) {
+        ALOGE("%s: Bad parameters", __func__);
+        return -1;
+    }
+
+    while ((tot_len + STEP_LENGTH - 1 < len) &&
+           (fcount++ < number_crashdump_files)) {
+
+        file_index = buf[tot_len];
 
         size = buf[tot_len + 8] |
                 buf[tot_len + 9]  << 8  |
                 buf[tot_len + 10] << 16 |
                 buf[tot_len + 11] << 24 ;
 
-        tot_len += 12;
+        tot_len += STEP_LENGTH;
+
+        if (file_index >= number_crashdump_files || size > len - tot_len) {
+            continue;
+        }
+
+        /* Some special handling is needed for crash reason file */
+        if (!strcmp(ssr_crash_dump_split_file_names[file_index],
+                SSR_CRASH_REASON_PREFIX)) {
+            dump_crash_reason(buf, len, buf + tot_len, size, time_stamp, true);
+            continue;
+        }
 
         snprintf(file_name, MAX_FILENAME_LEN, "%s%s%s%s%s",
                 SSR_DUMP_PATH, SSR_RAMDUMP_PREFIX,
-                ssr_crash_dump_split_file_names[header & 0xf],
+                ssr_crash_dump_split_file_names[file_index],
                 time_stamp, BIN_EXTN);
 
         fp = fopen(file_name, "w+");
@@ -416,13 +512,42 @@ exit:
     return;
 }
 
+void check_crash_reason_file(const char *time_stamp)
+{
+    FILE *out_fp = NULL;
+    char file_name[MAX_FILENAME_LEN] = {0};
+    const char *default_crash_reason = "Iaxxx Firmware Crashed";
+
+    snprintf(file_name, MAX_FILENAME_LEN, "%s%s%s%s%s",
+             SSR_DUMP_PATH, SSR_RAMDUMP_PREFIX,
+             SSR_CRASH_REASON_PREFIX,
+             time_stamp, BIN_EXTN);
+
+    if (access(file_name, F_OK) == -1) {
+        ALOGE("Write default crash reason into the crash reason file");
+
+        out_fp = fopen(file_name, "w");
+
+        if (out_fp == NULL) {
+            ALOGE("%s: Failed to open: %s , errno: %s", __func__,
+                   file_name, strerror(errno));
+            return;
+        }
+
+        fwrite(default_crash_reason, 1,
+               strlen(default_crash_reason), out_fp);
+
+        fclose(out_fp);
+    }
+}
+
 void ssr_dump_log() {
     time_t t;
-    struct tm *tm;
-    char curr_time_for_property[MAX_TIMESTR_LEN];
-    char curr_time_for_dump[MAX_TIMESTR_LEN];
-    char out_crash_file_name[MAX_FILENAME_LEN];
-    char out_reg_file_name[MAX_FILENAME_LEN];
+    struct tm *tm = NULL;
+    char curr_time_for_property[MAX_TIMESTR_LEN] = {0};
+    char curr_time_for_dump[MAX_TIMESTR_LEN] = {0};
+    char out_crash_file_name[MAX_FILENAME_LEN] = {0};
+    char out_reg_file_name[MAX_FILENAME_LEN] = {0};
 
     // get current time
     t = time(NULL);
@@ -455,6 +580,9 @@ void ssr_dump_log() {
             curr_time_for_dump, TXT_EXTN);
     ssr_copy_log(REGDUMP_LOGGER_DEV, out_reg_file_name);
     ALOGI("Register access history has been dumped %s", out_reg_file_name);
+
+    // Check the crash reason file
+    check_crash_reason_file(curr_time_for_dump);
 }
 
 /* --- main function --- */
