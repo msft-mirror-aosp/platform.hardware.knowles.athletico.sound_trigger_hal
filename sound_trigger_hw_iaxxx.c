@@ -1559,9 +1559,27 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
 
     /*
      * Reset mic and src package if sound trigger recording is active
-     * If sound trigger recording isn't active, then we don't need to
-     * recover src package.
+     * The src-mic, src-amp must be enable before AEC enable, because
+     * the endpoint sequence control.
+     *
+     * The stream 0 should be enable at last moment for the data alignment.
      */
+    if (stdev->is_mic_route_enabled == true) {
+        // recover src package if sound trigger recording is active
+        err = setup_src_plugin(stdev->odsp_hdl, SRC_MIC);
+        if (err != 0) {
+            ALOGE("failed to load SRC package");
+        }
+        err = enable_src_route(stdev->route_hdl, false, SRC_MIC);
+        if (err != 0) {
+            ALOGE("Failed to tear SRC-mic route");
+        }
+        err = enable_src_route(stdev->route_hdl, true, SRC_MIC);
+        if (err != 0) {
+            ALOGE("Failed to restart SRC-mic route");
+        }
+    }
+
     if (stdev->is_music_playing == true &&
         stdev->is_bargein_route_enabled == true) {
         if (is_mic_controlled_by_audhal(stdev) == true) {
@@ -1603,20 +1621,6 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
     }
 
     if (stdev->is_mic_route_enabled == true) {
-        // recover src package if sound trigger recording is active
-        err = setup_src_plugin(stdev->odsp_hdl, SRC_MIC);
-        if (err != 0) {
-            ALOGE("failed to load SRC package");
-        }
-        err = enable_src_route(stdev->route_hdl, false, SRC_MIC);
-        if (err != 0) {
-            ALOGE("Failed to tear SRC-mic route");
-        }
-        err = enable_src_route(stdev->route_hdl, true, SRC_MIC);
-        if (err != 0) {
-            ALOGE("Failed to restart SRC-mic route");
-        }
-
         if (is_mic_controlled_by_audhal(stdev) == false) {
             err = enable_mic_route(stdev->route_hdl, false, ct);
             if (err != 0) {
