@@ -164,7 +164,7 @@ struct knowles_sound_trigger_device {
     bool is_mic_route_enabled;
     bool is_music_playing;
     bool is_bargein_route_enabled;
-    bool is_chre_route_enabled;
+    bool is_chre_loaded;
     bool is_buffer_package_loaded;
     bool is_sensor_route_enabled;
     bool is_src_package_loaded;
@@ -671,7 +671,7 @@ static int check_and_destroy_buffer_package(
         (!stdev->is_sensor_destroy_in_prog &&
         !stdev->is_sensor_route_enabled) &&
         (!stdev->is_chre_destroy_in_prog &&
-        !stdev->is_chre_route_enabled)) {
+        !stdev->is_chre_loaded)) {
 
         err = destroy_buffer_package(stdev->odsp_hdl);
         if (err != 0) {
@@ -984,8 +984,9 @@ static int set_package_route(struct knowles_sound_trigger_device *stdev,
      * b/119390722 for tracing.
      */
     if (check_uuid_equality(uuid, stdev->chre_model_uuid)) {
-        set_chre_audio_route(stdev->route_hdl, bargein);
-        stdev->is_chre_route_enabled = true;
+        if (stdev->is_chre_loaded == true) {
+            set_chre_audio_route(stdev->route_hdl, bargein);
+        }
     } else if (check_uuid_equality(uuid, stdev->hotword_model_uuid)) {
         if (!((stdev->current_enable & PLUGIN1_MASK) & ~HOTWORD_MASK)) {
             set_hotword_route(stdev->route_hdl, bargein);
@@ -1017,8 +1018,9 @@ static int tear_package_route(struct knowles_sound_trigger_device *stdev,
      * b/119390722 for tracing.
      */
     if (check_uuid_equality(uuid, stdev->chre_model_uuid)) {
-        tear_chre_audio_route(stdev->route_hdl, bargein);
-        stdev->is_chre_route_enabled = false;
+        if (stdev->is_chre_loaded == true) {
+            tear_chre_audio_route(stdev->route_hdl, bargein);
+        }
     } else if (check_uuid_equality(uuid, stdev->hotword_model_uuid)) {
         if (!((stdev->current_enable & PLUGIN1_MASK) & ~HOTWORD_MASK))
             tear_hotword_route(stdev->route_hdl, bargein);
@@ -1334,7 +1336,10 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
                     tear_package_route(stdev, stdev->models[i].uuid,
                                     stdev->is_bargein_route_enabled);
                     stdev->models[i].is_active = false;
-                    destroy_package(stdev, &stdev->models[i]);
+                    if (!check_uuid_equality(stdev->models[i].uuid,
+                                            stdev->chre_model_uuid))
+                        destroy_package(stdev, &stdev->models[i]);
+
                     if ((stdev->hotword_buffer_enable) &&
                         !(stdev->current_enable & PLUGIN1_MASK)) {
                         tear_hotword_buffer_route(stdev->route_hdl,
@@ -1412,7 +1417,9 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
                                             stdev->is_bargein_route_enabled);
                         }
 
-                        setup_package(stdev, &stdev->models[i]);
+                        if (!check_uuid_equality(stdev->models[i].uuid,
+                                                stdev->chre_model_uuid))
+                            setup_package(stdev, &stdev->models[i]);
                         set_package_route(stdev, stdev->models[i].uuid,
                                         stdev->is_bargein_route_enabled);
                     }
@@ -1538,15 +1545,41 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
             tear_package_route(stdev, stdev->models[i].uuid,
                                stdev->is_bargein_route_enabled);
         }
+        // if chre enabled before crash during call, need to setup package for SLPI.
+        if (stdev->is_chre_loaded == true) {
+            err = setup_chre_package(stdev->odsp_hdl);
+            if (err != 0) {
+                ALOGE("Failed to load CHRE package");
+            }
+            stdev->current_enable = stdev->current_enable | CHRE_MASK;
+        }
         goto reload_oslo;
     }
 
 
     /*
      * Reset mic and src package if sound trigger recording is active
-     * If sound trigger recording isn't active, then we don't need to
-     * recover src package.
+     * The src-mic, src-amp must be enable before AEC enable, because
+     * the endpoint sequence control.
+     *
+     * The stream 0 should be enable at last moment for the data alignment.
      */
+    if (stdev->is_mic_route_enabled == true) {
+        // recover src package if sound trigger recording is active
+        err = setup_src_plugin(stdev->odsp_hdl, SRC_MIC);
+        if (err != 0) {
+            ALOGE("failed to load SRC package");
+        }
+        err = enable_src_route(stdev->route_hdl, false, SRC_MIC);
+        if (err != 0) {
+            ALOGE("Failed to tear SRC-mic route");
+        }
+        err = enable_src_route(stdev->route_hdl, true, SRC_MIC);
+        if (err != 0) {
+            ALOGE("Failed to restart SRC-mic route");
+        }
+    }
+
     if (stdev->is_music_playing == true &&
         stdev->is_bargein_route_enabled == true) {
         if (is_mic_controlled_by_audhal(stdev) == true) {
@@ -1588,20 +1621,6 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
     }
 
     if (stdev->is_mic_route_enabled == true) {
-        // recover src package if sound trigger recording is active
-        err = setup_src_plugin(stdev->odsp_hdl, SRC_MIC);
-        if (err != 0) {
-            ALOGE("failed to load SRC package");
-        }
-        err = enable_src_route(stdev->route_hdl, false, SRC_MIC);
-        if (err != 0) {
-            ALOGE("Failed to tear SRC-mic route");
-        }
-        err = enable_src_route(stdev->route_hdl, true, SRC_MIC);
-        if (err != 0) {
-            ALOGE("Failed to restart SRC-mic route");
-        }
-
         if (is_mic_controlled_by_audhal(stdev) == false) {
             err = enable_mic_route(stdev->route_hdl, false, ct);
             if (err != 0) {
@@ -1883,11 +1902,10 @@ static void chre_crash_handler(struct knowles_sound_trigger_device *stdev)
         stdev->chre_timer_created = false;
     }
 
-    if (stdev->is_chre_route_enabled == true) {
+    if (stdev->is_chre_loaded == true) {
         for (i = 0; i < MAX_MODELS; i++) {
             if (check_uuid_equality(stdev->models[i].uuid,
-                                    stdev->chre_model_uuid) &&
-                stdev->models[i].is_active == true) {
+                                    stdev->chre_model_uuid)) {
                 stdev->models[i].is_active = false;
                 stdev->models[i].is_loaded = false;
                 memset(&stdev->models[i].uuid, 0,
@@ -1895,7 +1913,7 @@ static void chre_crash_handler(struct knowles_sound_trigger_device *stdev)
                 break;
             }
         }
-        stdev->is_chre_route_enabled = false;
+        stdev->is_chre_loaded = false;
         stdev->current_enable &= ~CHRE_MASK;
     }
     stdev->is_chre_destroy_in_prog = false;
@@ -1942,7 +1960,6 @@ static int start_chre_model(struct knowles_sound_trigger_device *stdev,
         goto exit;
     }
 
-    // setup the sensor route
     err = check_and_setup_buffer_package(stdev);
     if (err != 0) {
         ALOGE("%s: ERROR: Failed to load the buffer package", __func__);
@@ -1951,20 +1968,28 @@ static int start_chre_model(struct knowles_sound_trigger_device *stdev,
 
     // add chre to recover list
     if (can_enable_chre(stdev)) {
-        if(stdev->is_chre_route_enabled == false) {
+        if(stdev->is_chre_loaded == false) {
             stdev->models[model_id].is_active = true;
             handle_input_source(stdev, true);
             setup_chre_package(stdev->odsp_hdl);
             set_chre_audio_route(stdev->route_hdl,
-                                stdev->is_bargein_route_enabled);
-            stdev->is_chre_route_enabled = true;
+                               stdev->is_bargein_route_enabled);
+            stdev->is_chre_loaded = true;
             stdev->current_enable = stdev->current_enable | CHRE_MASK;
         }
     } else {
-        ALOGW("%s: device is recording / in call, can't enable chre now",
+        ALOGW("%s: device is in call, setup CHRE for SLPI",
               __func__);
-        if (can_update_recover_list(stdev) == true)
-            update_recover_list(stdev, model_id, true);
+        //Setup CHRE package and allow SLPI connect
+        //during in-call mode.
+        if (stdev->is_chre_loaded == false) {
+            setup_chre_package(stdev->odsp_hdl);
+            stdev->models[model_id].uuid = stdev->chre_model_uuid;
+            stdev->is_chre_loaded = true;
+            stdev->current_enable = stdev->current_enable | CHRE_MASK;
+            if (can_update_recover_list(stdev) == true)
+                update_recover_list(stdev, model_id, true);
+        }
     }
 
 exit:
@@ -1976,7 +2001,7 @@ static void destroy_chre_model(struct knowles_sound_trigger_device *stdev)
     int err = 0;
     ALOGD("+%s+", __func__);
 
-    if (stdev->is_chre_route_enabled == true) {
+    if (stdev->is_chre_loaded == true) {
         int i;
         tear_chre_audio_route(stdev->route_hdl,
                               stdev->is_bargein_route_enabled);
@@ -1985,11 +2010,12 @@ static void destroy_chre_model(struct knowles_sound_trigger_device *stdev)
             ALOGE("%s: ERROR: Failed to destroy chre package", __func__);
         }
 
-        // now we can change the flag
+        //Need force reset the flag for chre due to in-call state
+        //The model is inactive, but need to clean if user disable it
+        //during call.
         for (i = 0; i < MAX_MODELS; i++) {
             if (check_uuid_equality(stdev->models[i].uuid,
-                                    stdev->chre_model_uuid) &&
-                stdev->models[i].is_active == true) {
+                                    stdev->chre_model_uuid)) {
                 stdev->models[i].is_active = false;
                 stdev->models[i].is_loaded = false;
                 memset(&stdev->models[i].uuid, 0,
@@ -1998,7 +2024,7 @@ static void destroy_chre_model(struct knowles_sound_trigger_device *stdev)
             }
         }
         handle_input_source(stdev, false);
-        stdev->is_chre_route_enabled = false;
+        stdev->is_chre_loaded = false;
         stdev->current_enable = stdev->current_enable & ~CHRE_MASK;
     }
 
@@ -2749,7 +2775,7 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
             update_recover_list(stdev, handle, false);
 
          // Disable the CHRE route
-        if (true == stdev->is_chre_route_enabled) {
+        if (stdev->is_chre_loaded == true) {
             struct itimerspec chre_timer_spec;
             struct sigevent chre_sigevent;
 
@@ -3367,7 +3393,7 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->is_voice_voip_stop = false;
     stdev->is_music_playing = false;
     stdev->is_bargein_route_enabled = false;
-    stdev->is_chre_route_enabled = false;
+    stdev->is_chre_loaded = false;
     stdev->is_buffer_package_loaded = false;
     stdev->hotword_buffer_enable = 0;
     stdev->music_buffer_enable = 0;
