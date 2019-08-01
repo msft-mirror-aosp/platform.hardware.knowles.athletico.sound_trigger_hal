@@ -819,6 +819,7 @@ static int setup_buffer(struct knowles_sound_trigger_device *stdev,
 
             err = setup_howord_buffer(stdev->odsp_hdl);
             if (err != 0) {
+                stdev->hotword_buffer_enable--;
                 ALOGE("Failed to create the buffer plugin");
                 goto exit;
             }
@@ -831,6 +832,7 @@ static int setup_buffer(struct knowles_sound_trigger_device *stdev,
 
             err = setup_music_buffer(stdev->odsp_hdl);
             if (err != 0) {
+                stdev->music_buffer_enable--;
                 ALOGE("Failed to load music buffer package");
                 goto exit;
             }
@@ -838,7 +840,10 @@ static int setup_buffer(struct knowles_sound_trigger_device *stdev,
     } else {
         if ((check_uuid_equality(model->uuid, stdev->hotword_model_uuid))
            || (check_uuid_equality(model->uuid, stdev->wakeup_model_uuid))) {
-
+            if (stdev->hotword_buffer_enable == 0) {
+                ALOGW("Invalid call for setup buffer");
+                goto exit;
+            }
             stdev->hotword_buffer_enable--;
             if (stdev->hotword_buffer_enable != 0)
                 goto exit;
@@ -852,7 +857,10 @@ static int setup_buffer(struct knowles_sound_trigger_device *stdev,
 
         } else if ((check_uuid_equality(model->uuid, stdev->ambient_model_uuid))
            || (check_uuid_equality(model->uuid, stdev->entity_model_uuid))) {
-
+            if (stdev->music_buffer_enable == 0) {
+                ALOGW("Invalid call for setup buffer");
+                goto exit;
+            }
             stdev->music_buffer_enable--;
             if (stdev->music_buffer_enable != 0)
                 goto exit;
