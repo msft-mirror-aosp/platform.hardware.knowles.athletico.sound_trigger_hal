@@ -27,7 +27,7 @@
 //#define LOG_NDDEBUG 0
 
 #include <log/log.h>
-#include "iaxxx-system-identifiers.h"
+#include <linux/mfd/adnc/iaxxx-system-identifiers.h>
 #include "adnc_strm.h"
 #include "tunnel.h"
 
