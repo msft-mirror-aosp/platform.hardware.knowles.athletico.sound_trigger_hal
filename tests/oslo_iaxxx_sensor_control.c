@@ -21,7 +21,7 @@
 #include <log/log.h>
 
 #include "cvq_ioctl.h"
-#include "iaxxx-module.h"
+#include <linux/mfd/adnc/iaxxx-module.h>
 
 #define IAXXX_DEV_NODE "/dev/iaxxx-module-celldrv"
 
