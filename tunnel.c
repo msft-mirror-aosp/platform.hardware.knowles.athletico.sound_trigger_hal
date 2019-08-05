@@ -25,8 +25,8 @@
 #include <unistd.h>
 
 #include <log/log.h>
-#include "iaxxx-tunnel-intf.h"
-#include "iaxxx-system-identifiers.h"
+#include <linux/mfd/adnc/iaxxx-tunnel-intf.h>
+#include <linux/mfd/adnc/iaxxx-system-identifiers.h>
 #include "tunnel.h"
 
 #define TUNNELING_DEVICE "/dev/tunnel0"
