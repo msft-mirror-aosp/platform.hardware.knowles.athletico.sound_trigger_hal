@@ -22,10 +22,9 @@ extern "C"
 {
 #endif
 
-#include <linux/mfd/adnc/iaxxx-odsp.h>
-#include <linux/mfd/adnc/iaxxx-system-identifiers.h>
+#include "iaxxx-odsp.h"
+#include "iaxxx-system-identifiers.h"
 
-#define NAME_MAX_SIZE 256
 struct iaxxx_odsp_hw;
 
 struct iaxxx_config_file {
