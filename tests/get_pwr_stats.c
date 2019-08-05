@@ -7,7 +7,7 @@
 #include <limits.h>
 #include <string.h>
 #include <inttypes.h>
-#include <linux/mfd/adnc/iaxxx-module.h>
+#include "iaxxx-module.h"
 
 #define LOG_TAG "ia_get_pwr_stats"
 
