@@ -35,7 +35,7 @@ extern "C" {
 #include <time.h>
 #include <unistd.h>
 
-#include <linux/mfd/adnc/iaxxx-module.h>
+#include "iaxxx-module.h"
 
 /* copy of SensorDriver.h from polygon */
 #define SENSOR_MAX_PARAMBLK_SIZE (1024 * 4)
