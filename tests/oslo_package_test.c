@@ -274,7 +274,7 @@ int main(int argc, char *argv[])
             goto exit;
         }
 
-        /* setup routing in athletico */
+        /* setup routing */
         set_mixer_ctl_val(mixer, "sensor0 En", 1);
 
         set_mixer_ctl_string(mixer, "Plgin2Ip Ep0 Conf", "SensorOut0");
@@ -283,7 +283,7 @@ int main(int argc, char *argv[])
         set_mixer_ctl_val(mixer, "Plgin2Blk1En", 1);
         set_mixer_ctl_val(mixer, "Plgin3Blk1En", 1);
     } else {
-        /* disconnect the route in athletico */
+        /* disconnect the route */
         set_mixer_ctl_val(mixer, "Plgin3Blk1En", 0);
         set_mixer_ctl_val(mixer, "Plgin2Blk1En", 0);
         set_mixer_ctl_val(mixer, "sensor0 En", 0);
