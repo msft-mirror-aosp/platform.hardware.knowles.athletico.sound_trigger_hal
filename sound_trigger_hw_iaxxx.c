@@ -1382,6 +1382,12 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
                         ALOGE("Failed to disable mic route with EXT OSC");
                         goto exit;
                     }
+
+                    ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_48K);
+                    if (ret != 0) {
+                        ALOGE("Failed to enable amp-ref route");
+                        goto exit;
+                    }
                 } else {
                     ret = enable_mic_route(stdev->route_hdl, false,
                                         INTERNAL_OSCILLATOR);
@@ -1438,6 +1444,11 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
             // reconfig mic
             if (stdev->is_mic_route_enabled == true) {
                 if (stdev->is_bargein_route_enabled == true) {
+                    ret = enable_amp_ref_route(stdev->route_hdl, false, STRM_48K);
+                    if (ret != 0) {
+                        ALOGE("Failed to disable amp-ref route");
+                        goto exit;
+                    }
                     ret = enable_mic_route(stdev->route_hdl, true,
                                         EXTERNAL_OSCILLATOR);
                     if (ret != 0) {
@@ -3552,15 +3563,6 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         else if (config->u.usecase.type == USECASE_TYPE_PCM_CAPTURE)
             stdev->is_media_recording = false;
 
-        // turn off amp-ref with 48khz before turning off main mic by media recording
-        if (is_mic_controlled_by_audhal(stdev) == true &&
-            stdev->is_bargein_route_enabled == true) {
-            ret = enable_amp_ref_route(stdev->route_hdl, false, STRM_48K);
-            if (ret != 0) {
-                ALOGE("Failed to disable amp-ref route");
-                goto exit;
-            }
-        }
         break;
     case AUDIO_EVENT_CAPTURE_DEVICE_ACTIVE:
         /*
@@ -3599,15 +3601,6 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         ALOGD("%s: handle capture stream active event %d, usecase :%d",
               __func__, event, config->u.usecase.type);
 
-        // turn on amp-ref with 48khz after turning on main mic by media recording
-        if (is_mic_controlled_by_audhal(stdev) == true &&
-            stdev->is_bargein_route_enabled == true) {
-            ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_48K);
-            if (ret != 0) {
-                ALOGE("Failed to enable amp-ref route");
-                goto exit;
-            }
-        }
         break;
     case AUDIO_EVENT_PLAYBACK_STREAM_INACTIVE:
         ALOGD("%s: handle playback stream inactive", __func__);
