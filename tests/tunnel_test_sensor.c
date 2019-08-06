@@ -26,9 +26,9 @@
 #define LOG_TAG "ia_tunneling_sensor_test"
 
 #include <cutils/log.h>
-#include "iaxxx-system-identifiers.h"
-#include "iaxxx-tunnel-intf.h"
-#include "iaxxx-sensor-tunnel.h"
+#include <linux/mfd/adnc/iaxxx-system-identifiers.h>
+#include <linux/mfd/adnc/iaxxx-tunnel-intf.h>
+#include <linux/mfd/adnc/iaxxx-sensor-tunnel.h>
 
 #define MAX_TUNNELS                 32
 #define BUF_SIZE                    8192

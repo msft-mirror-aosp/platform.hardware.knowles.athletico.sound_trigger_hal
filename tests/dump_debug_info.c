@@ -26,7 +26,7 @@
 #include <arpa/inet.h>
 #include <limits.h>
 #include <unistd.h>
-#include <iaxxx-debug-intf.h>
+#include <linux/mfd/adnc/iaxxx-debug-intf.h>
 
 #define LOG_TAG "ia_dump_registers"
 
