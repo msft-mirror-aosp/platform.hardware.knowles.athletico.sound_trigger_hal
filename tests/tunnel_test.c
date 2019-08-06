@@ -28,8 +28,8 @@
 #include <log/log.h>
 #include "tunnel.h"
 #include "conversion_routines.h"
-#include "iaxxx-system-identifiers.h"
-#include "iaxxx-tunnel-intf.h"
+#include <linux/mfd/adnc/iaxxx-system-identifiers.h>
+#include <linux/mfd/adnc/iaxxx-tunnel-intf.h>
 
 
 

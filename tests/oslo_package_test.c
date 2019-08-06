@@ -10,8 +10,8 @@
 
 #include <cutils/log.h>
 
-#include "iaxxx-odsp.h"
-#include "iaxxx-system-identifiers.h"
+#include <linux/mfd/adnc/iaxxx-odsp.h>
+#include <linux/mfd/adnc/iaxxx-system-identifiers.h>
 #include <tinyalsa/asoundlib.h>
 
 #define ODSP_NODE "/dev/iaxxx-odsp-celldrv"
