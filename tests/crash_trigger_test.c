@@ -23,7 +23,7 @@
 #include <limits.h>
 #include <string.h>
 #include <inttypes.h>
-#include "iaxxx-module.h"
+#include <linux/mfd/adnc/iaxxx-module.h>
 
 #define LOG_TAG "ia_crash_trigger_test"
 
