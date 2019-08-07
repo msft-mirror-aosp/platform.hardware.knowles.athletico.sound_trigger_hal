@@ -26,7 +26,7 @@
 
 #include <cutils/log.h>
 
-#include "iaxxx-odsp.h"
+#include <linux/mfd/adnc/iaxxx-odsp.h>
 
 #define ODSP_NODE "/dev/iaxxx-odsp-celldrv"
 #define PASS_THROUGH_PACKAGE "PassthruPackageSPITest.bin"
