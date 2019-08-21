@@ -180,6 +180,7 @@ struct knowles_sound_trigger_device {
     bool is_con_mic_route_enabled;
     bool is_in_voice_voip_mode;
     bool is_voice_voip_stop;
+    bool is_voice_voip_start;
 
     unsigned int current_enable;
     unsigned int recover_model_list;
@@ -3410,6 +3411,7 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->is_con_mic_route_enabled = false;
     stdev->is_in_voice_voip_mode = false;
     stdev->is_voice_voip_stop = false;
+    stdev->is_voice_voip_start = false;
     stdev->is_music_playing = false;
     stdev->is_bargein_route_enabled = false;
     stdev->is_chre_loaded = false;
@@ -3517,21 +3519,27 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         // get previous mode
         pre_mode = get_sthal_mode(stdev);
 
+        // get correct voice/voip mode in sthal
         if (stdev->is_in_voice_voip_mode == false &&
             stdev->is_voice_voip_stop == true &&
             stdev->is_media_recording == true) {
             ALOGD("%s: voice/voip didn't start, treat it as media recording inactive", __func__);
             stdev->is_voice_voip_stop = false;
             stdev->is_media_recording = false;
-        }
-
-        // update conditions
-        if (stdev->is_voice_voip_stop == true) {
+        } else if (stdev->is_voice_voip_stop == true) {
             ALOGD("%s: voice/voip device is inactive",
                   __func__);
             stdev->is_in_voice_voip_mode = false;
             stdev->is_voice_voip_stop = false;
+        } else if (stdev->is_in_voice_voip_mode == true &&
+                   stdev->is_voice_voip_stop == false &&
+                   stdev->is_voice_voip_start == false) {
+            ALOGD("%s: voice/voip usecase didn't start in incall mode, treat it as voice/voip is inactive",
+                  __func__);
+            stdev->is_in_voice_voip_mode = false;
         }
+
+        // check mic concurrency condition
         if (stdev->is_concurrent_capture == true &&
             stdev->is_in_voice_voip_mode == false) {
             if (stdev->is_media_recording == true)
@@ -3557,10 +3565,12 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
               __func__, event, config->u.usecase.type);
 
         // update conditions
-        if ((config->u.usecase.type == USECASE_TYPE_VOICE_CALL ||
-            config->u.usecase.type == USECASE_TYPE_VOIP_CALL))
+        if (stdev->is_voice_voip_start == true &&
+                (config->u.usecase.type == USECASE_TYPE_VOICE_CALL ||
+                 config->u.usecase.type == USECASE_TYPE_VOIP_CALL)) {
             stdev->is_voice_voip_stop = true;
-        else if (config->u.usecase.type == USECASE_TYPE_PCM_CAPTURE)
+            stdev->is_voice_voip_start = false;
+        } else if (config->u.usecase.type == USECASE_TYPE_PCM_CAPTURE)
             stdev->is_media_recording = false;
 
         break;
@@ -3580,7 +3590,7 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                   __func__);
             stdev->is_in_voice_voip_mode = true;
         }
-        if (config->u.usecase.type == USECASE_TYPE_PCM_CAPTURE ) {
+        if (config->u.usecase.type == USECASE_TYPE_PCM_CAPTURE) {
             stdev->is_media_recording = true;
         }
         if (stdev->is_concurrent_capture == true &&
@@ -3600,6 +3610,10 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
     case AUDIO_EVENT_CAPTURE_STREAM_ACTIVE:
         ALOGD("%s: handle capture stream active event %d, usecase :%d",
               __func__, event, config->u.usecase.type);
+        if (config->u.usecase.type == USECASE_TYPE_VOICE_CALL ||
+            config->u.usecase.type == USECASE_TYPE_VOIP_CALL) {
+            stdev->is_voice_voip_start = true;
+        }
 
         break;
     case AUDIO_EVENT_PLAYBACK_STREAM_INACTIVE:
