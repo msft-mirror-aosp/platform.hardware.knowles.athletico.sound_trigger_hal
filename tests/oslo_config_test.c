@@ -44,6 +44,9 @@
 #define CAL_MODE_IS_VALID(x) (x >= 0 && x < CAL_MODES_MAX)
 #define CAL_VERSION_DEFAULT 1.0f
 
+/* Transmit power */
+#define TX_CAL_FILE "/persist/oslo/tx_power.cal"
+
 typedef enum {
     INJECT_MODE_OFF = 0,
     INJECT_MODE_PRESENCE,
@@ -178,6 +181,7 @@ struct cal_coefficient {
     float ch3_q_val;
 };
 static struct cal_coefficient cal_table[CAL_MODES_MAX];
+static uint32_t tx_power_cal;
 
 static struct option const long_options[] =
 {
@@ -189,6 +193,7 @@ static struct option const long_options[] =
  {"readregister", required_argument, NULL, 'd'},
  {"writeregister", required_argument, NULL, 'w'},
  {"calibration", required_argument, NULL, 'c'},
+ {"tx power cal", required_argument, NULL, 'e'},
  {"injection", required_argument, NULL, 'i'},
  {"help", no_argument, NULL, GETOPT_HELP_CHAR},
  {NULL, 0, NULL, 0}
@@ -211,6 +216,7 @@ void usage() {
     7) oslo_config_test -c 'V:<ver> M:<mode> <ch1 I_val> <ch1 Q_val> <ch2 I_val> <ch2 Q_val> <ch3 I_val> <ch3 Q_val>' \n\
     8) oslo_config_test -t <test_mode> -v <elapsed time>\n\
     9) oslo_config_test -i <0/1/2>      # 0:off 1:entrance 2:interactive \n\
+    10) oslo_config_test -e '<tx_val>'\n\
     ", stdout);
 
     fputs("\n\
@@ -227,6 +233,7 @@ void usage() {
     -c          Store Calibration coefficients to persist file.\n\
     -t          Set the system into a test mode with optional gesture detection spoofing.\n\
     -i          Set the system into data injection mode.\n\
+    -e          Store Tx power calibration to persist file.\n\
     ", stdout);
 
     fputs("\n\
@@ -489,6 +496,55 @@ int cal_write_persist(const struct cal_coefficient* coef) {
     return 0;
 }
 
+static int read_tx_power_from_persist(void) {
+    FILE *fid;
+    uint32_t tx_power = 0;
+
+    fid = fopen(TX_CAL_FILE, "r");
+    if (fid == NULL) {
+        ALOGD("%s: Cannot open '%s'\n", __func__, TX_CAL_FILE);
+        return -errno;
+    }
+
+    while (!feof(fid)) {
+        int num;
+        num = fscanf(fid, "tx_power: %d\n", &tx_power);
+        if (num != 1) {
+            ALOGE("%s: Parse tx power failed, num:%d\n", __func__, num);
+            break;
+        }
+
+        memcpy(&tx_power_cal, &tx_power, sizeof(tx_power));
+        ALOGD("%s: tx_power: %d\n", __func__, tx_power);
+    }
+
+    fclose(fid);
+    return 0;
+}
+
+static int write_tx_power_to_persist(const uint32_t* tx_power) {
+    FILE *fid;
+
+    if (!tx_power) {
+        ALOGE("%s: Invalid tx power", __func__);
+        fprintf(stdout, "%s: Invalid tx power\n", __func__);
+        return -EINVAL;
+    }
+
+    fid = fopen(TX_CAL_FILE, "w");
+    if (fid == NULL) {
+        ALOGE("Cannot open '%s' (%s)\n", TX_CAL_FILE, strerror(errno));
+        fprintf(stdout, "Cannot open '%s' (%s)\n", TX_CAL_FILE, strerror(errno));
+        return -errno;
+    }
+
+    memcpy(&tx_power_cal, tx_power, sizeof(tx_power_cal));
+    fprintf(fid, "tx_power: %u\n", tx_power_cal);
+    ALOGD("%s: %d\n", __func__, tx_power_cal);
+    fclose(fid);
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
     struct ia_sensor_mgr * smd;
     char use_case;
@@ -502,6 +558,7 @@ int main(int argc, char *argv[]) {
     uint32_t reg_val;
     bool reg_val_set = false;
     struct cal_coefficient cal_coef = { .mode = CAL_INVALID_MODE };
+    uint32_t tx_power = 0;
     int test_mode_param_id = -1;
     oslo_inject_mode_t inject_mode = INJECT_MODE_OFF;
 
@@ -509,7 +566,7 @@ int main(int argc, char *argv[]) {
         usage();
     }
 
-    while ((c = getopt_long (argc, argv, "s:v:g:p:r:d:w:c:t:i:", long_options, NULL)) != -1) {
+    while ((c = getopt_long (argc, argv, "s:v:g:p:r:d:w:c:t:i:e:", long_options, NULL)) != -1) {
         switch (c) {
         case 's':
             if (NULL == optarg) {
@@ -617,6 +674,21 @@ int main(int argc, char *argv[]) {
                 }
             }
         break;
+        case 'e':
+            if (NULL == optarg) {
+                fprintf(stderr, "Incorrect usage, e option requires an argument");
+                usage();
+            } else {
+                int num_matched;
+                num_matched = sscanf(optarg, "%d", &tx_power);
+                if (num_matched == 1) {
+                    use_case = 'e';
+                } else {
+                    fprintf(stderr, "Incorrect -e arguments %s \n", optarg);
+                    usage();
+                }
+            }
+        break;
         case 't':
             if (NULL == optarg) {
                 fprintf(stderr, "Incorrect usage, t option requires an argument");
@@ -696,6 +768,9 @@ int main(int argc, char *argv[]) {
             }
             cal_read_persist();
             cal_write_persist(&cal_coef);
+        } else if ('e' == use_case) {
+            read_tx_power_from_persist();
+            write_tx_power_to_persist(&tx_power);
         } else if ('i' == use_case) {
             oslo_plugin_set_param(OSLO_SENSOR_PARAM_SLPY_STATE, 0);
             oslo_driver_set_param(smd, OSLO_CONTROL_INJECT_RADAR_DATA, inject_mode);
