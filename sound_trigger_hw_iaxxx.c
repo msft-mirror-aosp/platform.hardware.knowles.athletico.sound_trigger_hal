@@ -174,13 +174,13 @@ struct knowles_sound_trigger_device {
     bool is_sensor_destroy_in_prog;
     bool is_chre_destroy_in_prog;
 
-    // mode conditions
-    bool is_media_recording;
+    // conditions indicate AHAL and mic concurrency status
     bool is_concurrent_capture;
     bool is_con_mic_route_enabled;
-    bool is_in_voice_voip_mode;
-    bool is_voice_voip_stop;
-    bool is_voice_voip_start;
+    bool is_ahal_media_recording;
+    bool is_ahal_in_voice_voip_mode;
+    bool is_ahal_voice_voip_stop;
+    bool is_ahal_voice_voip_start;
 
     unsigned int current_enable;
     unsigned int recover_model_list;
@@ -226,13 +226,13 @@ static enum sthal_mode get_sthal_mode(struct knowles_sound_trigger_device *stdev
 {
     enum sthal_mode stmode = CON_DISABLED_ST;
 
-    if (stdev->is_in_voice_voip_mode == true) {
+    if (stdev->is_ahal_in_voice_voip_mode == true) {
         stmode = IN_CALL;
         goto exit;
     }
 
     if (stdev->is_concurrent_capture == false) {
-        if (stdev->is_media_recording == true)
+        if (stdev->is_ahal_media_recording == true)
           stmode = CON_DISABLED_CAPTURE;
         else
           stmode = CON_DISABLED_ST;
@@ -276,7 +276,7 @@ static bool can_update_recover_list(struct knowles_sound_trigger_device *stdev)
     return ret;
 }
 
-static bool is_mic_controlled_by_audhal(struct knowles_sound_trigger_device *stdev)
+static bool is_mic_controlled_by_ahal(struct knowles_sound_trigger_device *stdev)
 {
     bool ret = false;
 
@@ -1054,7 +1054,7 @@ static int async_setup_aec(struct knowles_sound_trigger_device *stdev)
         stdev->is_bargein_route_enabled != true &&
         stdev->is_mic_route_enabled != false) {
         ALOGD("%s: Bargein enable", __func__);
-        if (is_mic_controlled_by_audhal(stdev) == false) {
+        if (is_mic_controlled_by_ahal(stdev) == false) {
             ret = enable_mic_route(stdev->route_hdl, false,
                                 INTERNAL_OSCILLATOR);
             if (ret != 0) {
@@ -1084,7 +1084,7 @@ static int async_setup_aec(struct knowles_sound_trigger_device *stdev)
             goto exit;
         }
 
-        if (is_mic_controlled_by_audhal(stdev) == false) {
+        if (is_mic_controlled_by_ahal(stdev) == false) {
             ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_16K);
             if (ret != 0) {
                 ALOGE("Failed to enable amp-ref route");
@@ -1174,7 +1174,7 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
         ct = EXTERNAL_OSCILLATOR;
     }
 
-    if (is_mic_controlled_by_audhal(stdev) == true) {
+    if (is_mic_controlled_by_ahal(stdev) == true) {
         strmt = STRM_48K;
     }
 
@@ -1234,7 +1234,7 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
             stdev->is_bargein_route_enabled = true;
         }
         if (stdev->is_mic_route_enabled == false) {
-            if (is_mic_controlled_by_audhal(stdev) == false) {
+            if (is_mic_controlled_by_ahal(stdev) == false) {
                 err = enable_mic_route(stdev->route_hdl, true, ct);
                 if (err != 0) {
                     ALOGE("Failed to enable mic route");
@@ -1289,7 +1289,7 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
                    ALOGE("Failed to unload SRC-mic package");
                    goto exit;
                }
-               if (is_mic_controlled_by_audhal(stdev) == false) {
+               if (is_mic_controlled_by_ahal(stdev) == false) {
                    err = enable_mic_route(stdev->route_hdl, false, ct);
                    if (err != 0) {
                        ALOGE("Failed to disable mic route");
@@ -1308,6 +1308,74 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
 
 exit:
     return err;
+}
+
+static void update_sthal_conditions(struct knowles_sound_trigger_device *stdev,
+                                    audio_event_type_t event,
+                                    struct audio_event_info *config)
+{
+    if (event == AUDIO_EVENT_CAPTURE_DEVICE_INACTIVE) {
+        // get correct voice/voip mode in sthal
+        if (stdev->is_ahal_in_voice_voip_mode == false &&
+            stdev->is_ahal_voice_voip_stop == true &&
+            stdev->is_ahal_media_recording == true) {
+            ALOGD("%s: voice/voip didn't start, treat it as media recording inactive",
+                  __func__);
+            stdev->is_ahal_voice_voip_stop = false;
+            stdev->is_ahal_media_recording = false;
+        } else if (stdev->is_ahal_voice_voip_stop == true) {
+            ALOGD("%s: voice/voip device is inactive", __func__);
+            stdev->is_ahal_in_voice_voip_mode = false;
+            stdev->is_ahal_voice_voip_stop = false;
+        } else if (stdev->is_ahal_in_voice_voip_mode == true &&
+                   stdev->is_ahal_voice_voip_stop == false &&
+                   stdev->is_ahal_voice_voip_start == false) {
+            ALOGD("%s: voice/voip usecase didn't start in incall mode, treat it as voice/voip is inactive",
+                  __func__);
+            stdev->is_ahal_in_voice_voip_mode = false;
+        }
+
+        if (stdev->is_concurrent_capture == true &&
+            stdev->is_ahal_in_voice_voip_mode == false) {
+            if (stdev->is_ahal_media_recording == true)
+                stdev->is_con_mic_route_enabled = true;
+            else
+                stdev->is_con_mic_route_enabled = false;
+            ALOGD("%s: update mic con %d", __func__,
+                  stdev->is_con_mic_route_enabled);
+        }
+    } else if (event == AUDIO_EVENT_CAPTURE_DEVICE_ACTIVE) {
+        if (stdev->is_ahal_in_voice_voip_mode == false &&
+                (config->u.usecase.type == USECASE_TYPE_VOICE_CALL ||
+                 config->u.usecase.type == USECASE_TYPE_VOIP_CALL)) {
+            ALOGD("%s: voice/voip is actvie, close ST mic and don't use mic concurrently",
+                  __func__);
+            stdev->is_ahal_in_voice_voip_mode = true;
+        }
+        if (config->u.usecase.type == USECASE_TYPE_PCM_CAPTURE) {
+            stdev->is_ahal_media_recording = true;
+        }
+        if (stdev->is_concurrent_capture == true &&
+            stdev->is_ahal_in_voice_voip_mode == false &&
+            stdev->is_con_mic_route_enabled == false &&
+            config->device_info.device == ST_DEVICE_HANDSET_MIC) {
+            ALOGD("%s: enable mic concurrency", __func__);
+                  stdev->is_con_mic_route_enabled = true;
+        }
+    } else if (event == AUDIO_EVENT_CAPTURE_STREAM_INACTIVE) {
+        if (stdev->is_ahal_voice_voip_start == true &&
+                (config->u.usecase.type == USECASE_TYPE_VOICE_CALL ||
+                 config->u.usecase.type == USECASE_TYPE_VOIP_CALL)) {
+            stdev->is_ahal_voice_voip_stop = true;
+            stdev->is_ahal_voice_voip_start = false;
+        } else if (config->u.usecase.type == USECASE_TYPE_PCM_CAPTURE)
+            stdev->is_ahal_media_recording = false;
+    } else if (event == AUDIO_EVENT_CAPTURE_STREAM_ACTIVE) {
+        if (config->u.usecase.type == USECASE_TYPE_VOICE_CALL ||
+            config->u.usecase.type == USECASE_TYPE_VOIP_CALL) {
+            stdev->is_ahal_voice_voip_start = true;
+        }
+    }
 }
 
 static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
@@ -1343,16 +1411,16 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
                 if (stdev->models[i].is_active == true) {
                     update_recover_list(stdev, i, true);
                     tear_package_route(stdev, stdev->models[i].uuid,
-                                    stdev->is_bargein_route_enabled);
+                                       stdev->is_bargein_route_enabled);
                     stdev->models[i].is_active = false;
                     if (!check_uuid_equality(stdev->models[i].uuid,
-                                            stdev->chre_model_uuid))
+                                             stdev->chre_model_uuid))
                         destroy_package(stdev, &stdev->models[i]);
 
                     if ((stdev->hotword_buffer_enable) &&
                         !(stdev->current_enable & PLUGIN1_MASK)) {
                         tear_hotword_buffer_route(stdev->route_hdl,
-                                                stdev->is_bargein_route_enabled);
+                                                  stdev->is_bargein_route_enabled);
                     }
 
                     if ((stdev->music_buffer_enable) &&
@@ -1378,7 +1446,7 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
                         goto exit;
                     }
                     ret = enable_mic_route(stdev->route_hdl, false,
-                                        EXTERNAL_OSCILLATOR);
+                                           EXTERNAL_OSCILLATOR);
                     if (ret != 0) {
                         ALOGE("Failed to disable mic route with EXT OSC");
                         goto exit;
@@ -1391,7 +1459,7 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
                     }
                 } else {
                     ret = enable_mic_route(stdev->route_hdl, false,
-                                        INTERNAL_OSCILLATOR);
+                                           INTERNAL_OSCILLATOR);
                     if (ret != 0) {
                         ALOGE("Failed to disable mic route with INT OSC");
                         goto exit;
@@ -1424,19 +1492,19 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
                         if (stdev->hotword_buffer_enable &&
                             !(stdev->current_enable & PLUGIN1_MASK)) {
                             set_hotword_buffer_route(stdev->route_hdl,
-                                            stdev->is_bargein_route_enabled);
+                                                     stdev->is_bargein_route_enabled);
                         }
                         if (stdev->music_buffer_enable &&
                             !(stdev->current_enable & PLUGIN2_MASK)) {
                             set_music_buffer_route(stdev->route_hdl,
-                                            stdev->is_bargein_route_enabled);
+                                                   stdev->is_bargein_route_enabled);
                         }
 
                         if (!check_uuid_equality(stdev->models[i].uuid,
-                                                stdev->chre_model_uuid))
+                                                 stdev->chre_model_uuid))
                             setup_package(stdev, &stdev->models[i]);
                         set_package_route(stdev, stdev->models[i].uuid,
-                                        stdev->is_bargein_route_enabled);
+                                          stdev->is_bargein_route_enabled);
                     }
                 }
             }
@@ -1451,7 +1519,7 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
                         goto exit;
                     }
                     ret = enable_mic_route(stdev->route_hdl, true,
-                                        EXTERNAL_OSCILLATOR);
+                                           EXTERNAL_OSCILLATOR);
                     if (ret != 0) {
                         ALOGE("Failed to enable mic route with EXT OSC");
                         goto exit;
@@ -1464,7 +1532,7 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
                     }
                 } else {
                     ret = enable_mic_route(stdev->route_hdl, true,
-                                       INTERNAL_OSCILLATOR);
+                                           INTERNAL_OSCILLATOR);
                     if (ret != 0) {
                         ALOGE("Failed to enable mic route with INT OSC");
                         goto exit;
@@ -1602,7 +1670,7 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
 
     if (stdev->is_music_playing == true &&
         stdev->is_bargein_route_enabled == true) {
-        if (is_mic_controlled_by_audhal(stdev) == true) {
+        if (is_mic_controlled_by_ahal(stdev) == true) {
             strmt = STRM_48K;
         }
         err = setup_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
@@ -1641,7 +1709,7 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
     }
 
     if (stdev->is_mic_route_enabled == true) {
-        if (is_mic_controlled_by_audhal(stdev) == false) {
+        if (is_mic_controlled_by_ahal(stdev) == false) {
             err = enable_mic_route(stdev->route_hdl, false, ct);
             if (err != 0) {
                 ALOGE("failed to tear mic route");
@@ -2523,7 +2591,6 @@ static int stop_recognition(struct knowles_sound_trigger_device *stdev,
     }
     if (can_update_recover_list(stdev) == true) {
         update_recover_list(stdev, handle, false);
-        status = -EAGAIN;
         goto exit;
     }
 
@@ -2928,7 +2995,6 @@ static int stdev_start_recognition(
         // Device is in voice/VoIP call, add model to recover list first
         // recover model once voice/VoIP is ended.
         update_recover_list(stdev, handle, true);
-        status = -EAGAIN;
         goto exit;
     }
 
@@ -3409,9 +3475,9 @@ static int stdev_open(const hw_module_t *module, const char *name,
 
     stdev->is_mic_route_enabled = false;
     stdev->is_con_mic_route_enabled = false;
-    stdev->is_in_voice_voip_mode = false;
-    stdev->is_voice_voip_stop = false;
-    stdev->is_voice_voip_start = false;
+    stdev->is_ahal_in_voice_voip_mode = false;
+    stdev->is_ahal_voice_voip_stop = false;
+    stdev->is_ahal_voice_voip_start = false;
     stdev->is_music_playing = false;
     stdev->is_bargein_route_enabled = false;
     stdev->is_chre_loaded = false;
@@ -3421,7 +3487,7 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->current_enable = 0;
     stdev->is_sensor_route_enabled = false;
     stdev->recover_model_list = 0;
-    stdev->is_media_recording = false;
+    stdev->is_ahal_media_recording = false;
     stdev->is_concurrent_capture = hw_properties.concurrent_capture;
 
     stdev->is_sensor_destroy_in_prog = false;
@@ -3505,6 +3571,16 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
 
     pthread_mutex_lock(&stdev->lock);
 
+    // update conditions for mic concurrency whatever firmware status may be.
+    if (event == AUDIO_EVENT_CAPTURE_DEVICE_INACTIVE ||
+        event == AUDIO_EVENT_CAPTURE_DEVICE_ACTIVE ||
+        event == AUDIO_EVENT_CAPTURE_STREAM_INACTIVE ||
+        event == AUDIO_EVENT_CAPTURE_STREAM_ACTIVE) {
+        pre_mode = get_sthal_mode(stdev);
+        update_sthal_conditions(stdev, event, config);
+        cur_mode = get_sthal_mode(stdev);
+    }
+
     if (stdev->is_st_hal_ready == false) {
         ALOGE("%s: ST HAL is not ready yet", __func__);
         ret = -EINVAL;
@@ -3513,107 +3589,17 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
 
     switch (event) {
     case AUDIO_EVENT_CAPTURE_DEVICE_INACTIVE:
+    case AUDIO_EVENT_CAPTURE_DEVICE_ACTIVE:
+        ALOGD("%s: handle capture device event %d", __func__, event);
 
-        ALOGD("%s: handle capture device inactive event %d", __func__, event);
-
-        // get previous mode
-        pre_mode = get_sthal_mode(stdev);
-
-        // get correct voice/voip mode in sthal
-        if (stdev->is_in_voice_voip_mode == false &&
-            stdev->is_voice_voip_stop == true &&
-            stdev->is_media_recording == true) {
-            ALOGD("%s: voice/voip didn't start, treat it as media recording inactive", __func__);
-            stdev->is_voice_voip_stop = false;
-            stdev->is_media_recording = false;
-        } else if (stdev->is_voice_voip_stop == true) {
-            ALOGD("%s: voice/voip device is inactive",
-                  __func__);
-            stdev->is_in_voice_voip_mode = false;
-            stdev->is_voice_voip_stop = false;
-        } else if (stdev->is_in_voice_voip_mode == true &&
-                   stdev->is_voice_voip_stop == false &&
-                   stdev->is_voice_voip_start == false) {
-            ALOGD("%s: voice/voip usecase didn't start in incall mode, treat it as voice/voip is inactive",
-                  __func__);
-            stdev->is_in_voice_voip_mode = false;
-        }
-
-        // check mic concurrency condition
-        if (stdev->is_concurrent_capture == true &&
-            stdev->is_in_voice_voip_mode == false) {
-            if (stdev->is_media_recording == true)
-                stdev->is_con_mic_route_enabled = true;
-            else
-                stdev->is_con_mic_route_enabled = false;
-            ALOGD("%s: update mic con %d", __func__, stdev->is_con_mic_route_enabled);
-        }
-
-        cur_mode = get_sthal_mode(stdev);
-
-        do_handle_functions(stdev, pre_mode, cur_mode,
-                            AUDIO_EVENT_CAPTURE_DEVICE_INACTIVE);
+        //handle capture device on/off event
+        do_handle_functions(stdev, pre_mode, cur_mode, event);
 
         break;
     case AUDIO_EVENT_CAPTURE_STREAM_INACTIVE:
-        /*
-         * [TODO] handle capture device on/off event
-         * There might be concurrency devices usecase.
-         *
-         */
-        ALOGD("%s: handle capture stream inactive event %d, usecase %d",
-              __func__, event, config->u.usecase.type);
-
-        // update conditions
-        if (stdev->is_voice_voip_start == true &&
-                (config->u.usecase.type == USECASE_TYPE_VOICE_CALL ||
-                 config->u.usecase.type == USECASE_TYPE_VOIP_CALL)) {
-            stdev->is_voice_voip_stop = true;
-            stdev->is_voice_voip_start = false;
-        } else if (config->u.usecase.type == USECASE_TYPE_PCM_CAPTURE)
-            stdev->is_media_recording = false;
-
-        break;
-    case AUDIO_EVENT_CAPTURE_DEVICE_ACTIVE:
-        /*
-         * Handle capture device active event
-         */
-        ALOGD("%s: handle capture device active event %d", __func__, event);
-
-        pre_mode = get_sthal_mode(stdev);
-
-        // update conditions
-        if (stdev->is_in_voice_voip_mode == false &&
-                (config->u.usecase.type == USECASE_TYPE_VOICE_CALL ||
-                 config->u.usecase.type == USECASE_TYPE_VOIP_CALL)) {
-            ALOGD("%s: voice/voip is actvie, close ST mic and don't use mic concurrently",
-                  __func__);
-            stdev->is_in_voice_voip_mode = true;
-        }
-        if (config->u.usecase.type == USECASE_TYPE_PCM_CAPTURE) {
-            stdev->is_media_recording = true;
-        }
-        if (stdev->is_concurrent_capture == true &&
-            stdev->is_in_voice_voip_mode == false &&
-            stdev->is_con_mic_route_enabled == false &&
-            config->device_info.device == ST_DEVICE_HANDSET_MIC) {
-            ALOGD("%s: enable mic concurrency", __func__);
-                stdev->is_con_mic_route_enabled = true;
-        }
-
-        cur_mode = get_sthal_mode(stdev);
-
-        do_handle_functions(stdev, pre_mode, cur_mode,
-                            AUDIO_EVENT_CAPTURE_DEVICE_ACTIVE);
-
-        break;
     case AUDIO_EVENT_CAPTURE_STREAM_ACTIVE:
-        ALOGD("%s: handle capture stream active event %d, usecase :%d",
+        ALOGD("%s: handle capture stream event %d, usecase %d",
               __func__, event, config->u.usecase.type);
-        if (config->u.usecase.type == USECASE_TYPE_VOICE_CALL ||
-            config->u.usecase.type == USECASE_TYPE_VOIP_CALL) {
-            stdev->is_voice_voip_start = true;
-        }
 
         break;
     case AUDIO_EVENT_PLAYBACK_STREAM_INACTIVE:
@@ -3706,7 +3692,7 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                         goto exit;
                     }
 
-                    if (is_mic_controlled_by_audhal(stdev) == false) {
+                    if (is_mic_controlled_by_ahal(stdev) == false) {
                         ret = enable_amp_ref_route(stdev->route_hdl, false, STRM_16K);
                         if (ret != 0) {
                             ALOGE("Failed to disable amp-ref route");
