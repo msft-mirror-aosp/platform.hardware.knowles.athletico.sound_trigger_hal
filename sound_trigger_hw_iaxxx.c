@@ -73,8 +73,8 @@
 #define SOUND_TRIGGER_MIXER_PATH_XML       "/vendor/etc/sound_trigger_mixer_paths_default.xml"
 
 #define MAX_SND_CARD    (8)
-#define RETRY_NUMBER    (10)
-#define RETRY_US        (500000)
+#define RETRY_NUMBER    (40)
+#define RETRY_US        (1000000)
 #define TUNNEL_TIMEOUT  5
 
 #define SENSOR_CREATE_WAIT_TIME_IN_S   (1)
@@ -3302,7 +3302,7 @@ static int find_sound_card() {
     const char *snd_card_name;
     struct mixer *mixer = NULL;
     bool card_verifed[MAX_SND_CARD] = {false};
-    const int retry_limit = property_get_int32("audio.snd_card.open.retries",
+    const int retry_limit = property_get_int32("vendor.audio.snd_card.open.retries",
                                             RETRY_NUMBER);
     ALOGD("+%s+", __func__);
 
