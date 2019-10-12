@@ -903,7 +903,7 @@ int setup_chre_package(struct iaxxx_odsp_hw *odsp_hdl)
 
     /* Create CHRE plugins */
     cdata.type = CONFIG_FILE;
-    cdata.data.fdata.filename = BUFFER_CONFIG_VAL_2_SEC;
+    cdata.data.fdata.filename = BUFFER_CONFIG_VAL_CHRE;
     err = iaxxx_odsp_plugin_set_creation_config(odsp_hdl,
                                                 CHRE_INSTANCE_ID,
                                                 IAXXX_HMD_BLOCK_ID,
