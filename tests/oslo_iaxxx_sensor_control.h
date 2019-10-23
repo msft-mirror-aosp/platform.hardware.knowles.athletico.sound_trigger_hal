@@ -182,6 +182,7 @@ typedef enum oslo_sensor_param_id_e {
     OSLO_SENSOR_PARAM_ENABLE_AUDIO_FILTER,
     OSLO_SENSOR_PARAM_ENABLE_WLC_FILTER,
     OSLO_SENSOR_PARAM_CPS,
+    OSLO_SENSOR_MAX_POWER_MODE,
 
     /* Force enums to be of size int */
     OSLO_SENSOR_PARAM_ID_FORCE_SIZE = INT_MAX,

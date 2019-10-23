@@ -154,6 +154,7 @@ static const oslo_settings_t oslo_plugin_settings[] =
     {OSLO_SENSOR_PARAM_ENABLE_AUDIO_FILTER,                 "plugin_enable_audio_filter"},
     {OSLO_SENSOR_PARAM_ENABLE_WLC_FILTER,                   "plugin_enable_wlc_filter"},
     {OSLO_SENSOR_PARAM_CPS,                                 "plugin_cps"},
+    {OSLO_SENSOR_MAX_POWER_MODE,                            "plugin_max_power_mode"},
 };
 
 /* map oslo plugin test mode name to param id */
