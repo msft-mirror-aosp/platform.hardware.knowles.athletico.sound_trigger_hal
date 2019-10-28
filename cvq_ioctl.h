@@ -50,7 +50,7 @@
 #define SENSOR_PKG_ID           0
 #define SENSOR_PLUGIN_IDX       0
 #define SENSOR_INSTANCE_ID      9
-#define SENSOR_PRIORITY         1
+#define SENSOR_PRIORITY         2
 #define SENSOR_PRESENCE_MODE    0
 #define SENSOR_DETECTED_MODE    1
 #define SENSOR_MAX_MODE         2
@@ -60,6 +60,7 @@
 #define OSLO_EP_DISCONNECT      (0x205)
 #define CHRE_EP_DISCONNECT      (0x206)
 #define OSLO_BUF_INSTANCE_ID    8
+#define OSLO_BUF_PRIORITY       2
 
 #define AEC_PKG_ID       7
 #define AEC_PLUGIN_IDX   0
@@ -70,7 +71,7 @@
 #define CHRE_INSTANCE_ID     5
 #define CHRE_EVT_ID          3
 #define CHRE_EVT_PARAM_ID    8
-#define CHRE_BUF_SIZE        60480
+#define CHRE_BUF_SIZE        64000 // 320B (160 samples) per 10ms -> 64000B per 2s
 #define CHRE_CONFIGURED      (0x203)
 #define CHRE_DESTROYED       (0x204)
 #define CHRE_EVT_MASK        (0x1f)
@@ -115,6 +116,7 @@
 #define BUFFER_CONFIG_OSLO_VAL      "BufferConfigValOslo.bin"
 #define BUFFER_CONFIG_VAL_MULTI_SEC "BufferConfigVal.bin"
 #define BUFFER_CONFIG_VAL_2_SEC     "BufferConfigVal2Sec.bin"
+#define BUFFER_CONFIG_VAL_CHRE      "BufferConfigValCHRE.bin"
 #define OK_GOOGLE_PACKAGE           "OkGooglePackage.bin"
 #define AMBIENT_EC_PACKAGE          "AmbientECPackage.bin"
 #define AMBIENT_DA_PACKAGE          "AmbientDAPackage.bin"
