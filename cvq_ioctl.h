@@ -127,25 +127,35 @@
 #define SRC_PACKAGE                 "SampleRateConverterPackage.bin"
 #define SRC_CONFIG                  "SampleRateConverterCreateCfgBlkGen.bin"
 
-#define MIC_ROUTE                            "mic1-route"
-#define MIC_ROUTE_EXT_CLK                    "mic-route-external-clock"
-#define MIC_ROUTE_INT_CLK                    "mic-route-internal-clock"
-#define SRC_ROUTE_MIC                        "src-route-mic"
-#define SRC_ROUTE_AMP_REF                    "src-route-amp-ref"
-#define BARGEIN_AMP_REF                      "bargein-amp-ref"
-#define BARGEIN_AMP_REF_48K                  "bargein-amp-ref-48k"
-#define BARGEIN_ROUTE                        "bargein-route"
-#define DOWNLINK_AUDIO_ROUTE                 "downlink-audio-route"
-#define MUSIC_AUDIO_ROUTE                    "music-audio-route"
-#define SENSOR_ROTUE                         "oslo-route"
-#define HOTWORD_WITH_BARGEIN_ROUTE           "hotword-route-with-bargein"
-#define HOTWORD_WITHOUT_BARGEIN_ROUTE        "hotword-route-without-bargein"
-#define CHRE_WITH_BARGEIN_ROUTE              "chre-route-with-bargein"
-#define CHRE_WITHOUT_BARGEIN_ROUTE           "chre-route-without-bargein"
-#define AMBIENT_WITH_BARGEIN_ROUTE           "ambient-route-with-bargein"
-#define AMBIENT_WITHOUT_BARGEIN_ROUTE        "ambient-route-without-bargein"
-#define BUFFER_WITH_BARGEIN_ROUTE            "buffer-route-with-bargein"
-#define BUFFER_WITHOUT_BARGEIN_ROUTE         "buffer-route-without-bargein"
+/* The routing definition depend on the platform
+   and the features plugin.
+ */
+enum {
+    ST_ROUTE_MIN = 0,
+
+/* Input Port routing definition */
+    ST_MIC_ROUTE_INT_CLK = ST_ROUTE_MIN,
+    ST_MIC_ROUTE_EXT_CLK,
+    ST_BARGEIN_AMP_REF,
+    ST_BARGEIN_AMP_REF_48K,
+
+/* Plugin routing definition */
+    ST_HOTWORD_WITHOUT_BARGEIN,
+    ST_HOTWORD_WITH_BARGEIN,
+    ST_HOTWORD_BUFFER_WITHOUT_BARGEIN,
+    ST_HOTWORD_BUFFER_WITH_BARGEIN,
+    ST_AMBIENT_WITHOUT_BARGEIN,
+    ST_AMBIENT_WITH_BARGEIN,
+    ST_AMBIENT_BUFFER_WITHOUT_BARGEIN,
+    ST_AMBIENT_BUFFER_WITH_BARGEIN,
+    ST_BARGEIN_ROUTE,
+    ST_CHRE_WITHOUT_BARGEIN,
+    ST_CHRE_WITH_BARGEIN,
+    ST_SRC_ROUTE_MIC,
+    ST_SRC_ROUTE_AMP_REF,
+    ST_SENSOR_ROUTE,
+    ST_ROUTE_MAX,
+};
 
 enum clock_type {
     INTERNAL_OSCILLATOR,
@@ -236,6 +246,7 @@ int get_wakeup_param_blk(struct iaxxx_odsp_hw *odsp_hdl, void *payload, unsigned
 int set_default_apll_clk(struct mixer *mixer);
 int get_fw_status(struct iaxxx_odsp_hw *odsp_hdl, unsigned int *status);
 int reset_fw(struct iaxxx_odsp_hw *odsp_hdl);
+int reset_all_route(struct audio_route *route_hdl);
 int trigger_sensor_destroy_event(struct iaxxx_odsp_hw *odsp_hdl);
 int trigger_chre_destroy_event(struct iaxxx_odsp_hw *odsp_hdl);
 int setup_slpi_wakeup_event(struct iaxxx_odsp_hw *odsp_hdl, bool enabled);

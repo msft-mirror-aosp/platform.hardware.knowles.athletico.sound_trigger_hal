@@ -1588,51 +1588,14 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
     }
 
     /*
-     * If ST mode is IN_CALL, tear all route and they will be
-     * reloaded after ending the call
+     * If ST mode is IN_CALL, make sure mic route as false,
+     * that would be reloaded after ending the call
      */
     if (get_sthal_mode(stdev) == IN_CALL) {
         ALOGD("%s: ST mode is in_call, reset all routes", __func__);
-        err = enable_mic_route(stdev->route_hdl, false, ct);
-        if (err != 0) {
-            ALOGE("failed to tear mic route");
-        }
+
         stdev->is_mic_route_enabled = false;
 
-        err = enable_src_route(stdev->route_hdl, false, SRC_MIC);
-        if (err != 0) {
-            ALOGE("Failed to tear SRC-mic route");
-        }
-        if (stdev->is_music_playing == true &&
-            stdev->is_bargein_route_enabled == true) {
-            err = enable_amp_ref_route(stdev->route_hdl, false, strmt);
-            if (err != 0) {
-                ALOGE("Failed to tear amp-ref route");
-            }
-            err = enable_src_route(stdev->route_hdl, false, SRC_AMP_REF);
-            if (err != 0) {
-                ALOGE("Failed to tear SRC-amp route");
-            }
-            err = enable_bargein_route(stdev->route_hdl, false);
-            if (err != 0) {
-                ALOGE("Failed to tear bargein route");
-            }
-        }
-        // reset model route
-        for (i = 0; i < MAX_MODELS; i++) {
-            if (check_uuid_equality(stdev->models[i].uuid, stdev->hotword_model_uuid) ||
-                (check_uuid_equality(stdev->models[i].uuid, stdev->wakeup_model_uuid))) {
-                tear_hotword_buffer_route(stdev->route_hdl,
-                                          stdev->is_bargein_route_enabled);
-            }
-            if (check_uuid_equality(stdev->models[i].uuid, stdev->ambient_model_uuid) ||
-                (check_uuid_equality(stdev->models[i].uuid, stdev->entity_model_uuid))) {
-                tear_music_buffer_route(stdev->route_hdl,
-                                        stdev->is_bargein_route_enabled);
-            }
-            tear_package_route(stdev, stdev->models[i].uuid,
-                               stdev->is_bargein_route_enabled);
-        }
         // if chre enabled before crash during call, need to setup package for SLPI.
         if (stdev->is_chre_loaded == true) {
             err = setup_chre_package(stdev->odsp_hdl);
@@ -1658,10 +1621,6 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
         if (err != 0) {
             ALOGE("failed to load SRC package");
         }
-        err = enable_src_route(stdev->route_hdl, false, SRC_MIC);
-        if (err != 0) {
-            ALOGE("Failed to tear SRC-mic route");
-        }
         err = enable_src_route(stdev->route_hdl, true, SRC_MIC);
         if (err != 0) {
             ALOGE("Failed to restart SRC-mic route");
@@ -1677,10 +1636,6 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
         if (err != 0) {
             ALOGE("failed to load SRC package");
         }
-        err = enable_src_route(stdev->route_hdl, false, SRC_AMP_REF);
-        if (err != 0) {
-            ALOGE("Failed to tear SRC-amp route");
-        }
         err = enable_src_route(stdev->route_hdl, true, SRC_AMP_REF);
         if (err != 0) {
             ALOGE("Failed to restart SRC-amp route");
@@ -1690,17 +1645,9 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
         if (err != 0) {
             ALOGE("Failed to restart AEC package");
         }
-        err = enable_bargein_route(stdev->route_hdl, false);
-        if (err != 0) {
-            ALOGE("Failed to tear bargein route");
-        }
         err = enable_bargein_route(stdev->route_hdl, true);
         if (err != 0) {
             ALOGE("Failed to restart bargein route");
-        }
-        err = enable_amp_ref_route(stdev->route_hdl, false, strmt);
-        if (err != 0) {
-            ALOGE("Failed to tear amp-ref route");
         }
         err = enable_amp_ref_route(stdev->route_hdl, true, strmt);
         if (err != 0) {
@@ -1710,10 +1657,6 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
 
     if (stdev->is_mic_route_enabled == true) {
         if (is_mic_controlled_by_ahal(stdev) == false) {
-            err = enable_mic_route(stdev->route_hdl, false, ct);
-            if (err != 0) {
-                ALOGE("failed to tear mic route");
-            }
             err = enable_mic_route(stdev->route_hdl, true, ct);
             if (err != 0) {
                 ALOGE("failed to restart mic route");
@@ -1732,8 +1675,6 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
                 if ((stdev->hotword_buffer_enable) &&
                     (!(stdev->current_enable & HOTWORD_MASK) ||
                       (stdev->current_enable & WAKEUP_MASK))) {
-                    tear_hotword_buffer_route(stdev->route_hdl,
-                                            stdev->is_bargein_route_enabled);
                     set_hotword_buffer_route(stdev->route_hdl,
                                             stdev->is_bargein_route_enabled);
                 }
@@ -1743,15 +1684,11 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
                 if ((stdev->music_buffer_enable) &&
                     (!(stdev->current_enable & AMBIENT_MASK) ||
                       (stdev->current_enable & ENTITY_MASK))) {
-                    tear_music_buffer_route(stdev->route_hdl,
-                                        stdev->is_bargein_route_enabled);
                     set_music_buffer_route(stdev->route_hdl,
                                         stdev->is_bargein_route_enabled);
                 }
             }
             setup_package(stdev, &stdev->models[i]);
-            tear_package_route(stdev, stdev->models[i].uuid,
-                            stdev->is_bargein_route_enabled);
             set_package_route(stdev, stdev->models[i].uuid,
                             stdev->is_bargein_route_enabled);
         }
@@ -1764,13 +1701,6 @@ reload_oslo:
         if (stdev->models[i].is_loaded == true) {
             if (check_uuid_equality(stdev->models[i].uuid,
                                     stdev->sensor_model_uuid)) {
-                err = set_sensor_route(stdev->route_hdl, false);
-                if (err != 0) {
-                    ALOGE("%s: tear Sensor route fail", __func__);
-                    goto exit;
-                }
-                stdev->is_sensor_route_enabled = false;
-
                 // setup the sensor route
                 err = setup_sensor_package(stdev->odsp_hdl);
                 if (err != 0) {
@@ -1908,6 +1838,7 @@ static void sensor_timeout_recover()
                 ALOGE("%s: ERROR: Failed to reset the firmware %d(%s)",
                       __func__, errno, strerror(errno));
             }
+            reset_all_route(stdev->route_hdl);
             sensor_crash_handler(stdev);
         }
     }
@@ -2149,6 +2080,7 @@ static void chre_timeout_recover()
                 ALOGE("%s: ERROR: Failed to reset the firmware %d(%s)",
                       __func__, errno, strerror(errno));
             }
+            reset_all_route(stdev->route_hdl);
             chre_crash_handler(stdev);
         }
     }
@@ -2421,6 +2353,7 @@ static void *callback_thread_loop(void *context)
                     ALOGD("Firmware has crashed");
                     // Don't allow any op on ST HAL until recovery is complete
                     stdev->is_st_hal_ready = false;
+                    reset_all_route(stdev->route_hdl);
                     stdev->is_streaming = 0;
 
                     // Firmware crashed, clear CHRE/Oslo timer and flags here
