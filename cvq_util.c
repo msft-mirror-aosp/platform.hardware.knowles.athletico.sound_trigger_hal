@@ -1092,9 +1092,10 @@ int setup_sensor_package(struct iaxxx_odsp_hw *odsp_hdl)
     }
 
     // Create Buffer plugin
-    err = iaxxx_odsp_plugin_create(odsp_hdl, OSLO_BUF_INSTANCE_ID, BUF_PRIORITY,
-                                   BUF_PKG_ID, BUF_PLUGIN_IDX,
-                                   IAXXX_HMD_BLOCK_ID, PLUGIN_DEF_CONFIG_ID);
+    err = iaxxx_odsp_plugin_create(odsp_hdl, OSLO_BUF_INSTANCE_ID,
+                                   OSLO_BUF_PRIORITY, BUF_PKG_ID,
+                                   BUF_PLUGIN_IDX, IAXXX_HMD_BLOCK_ID,
+                                   PLUGIN_DEF_CONFIG_ID);
     if (err != 0) {
         ALOGE("%s: ERROR: Failed to create Sensor Buffer %d(%s)",
             __func__, errno, strerror(errno));
