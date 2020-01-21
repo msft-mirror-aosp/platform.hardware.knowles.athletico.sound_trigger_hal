@@ -1601,12 +1601,6 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
          * Need to reset the enabled flag
          */
         stdev->is_bargein_route_enabled = false;
-    } else if (stdev->rx_active_count > 0 &&
-               stdev->is_bargein_route_enabled == false) {
-        /* rx stream is enabled during codec recovery.
-         * Need to raise the enabled flag
-         */
-        stdev->is_bargein_route_enabled = true;
     }
 
     if (stdev->is_buffer_package_loaded == true) {
@@ -1631,6 +1625,13 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
         ALOGD("%s: ST mode is in_call, reset all routes", __func__);
 
         stdev->is_mic_route_enabled = false;
+        stdev->is_bargein_route_enabled = false;
+        for (i = 0; i < MAX_MODELS; i++) {
+            if (stdev->models[i].is_active == true) {
+                update_recover_list(stdev, i, true);
+                stdev->models[i].is_active = false;
+            }
+        }
 
         // if chre enabled before crash during call, need to setup package for SLPI.
         if (stdev->is_chre_loaded == true) {
@@ -1648,8 +1649,6 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
      * Reset mic and src package if sound trigger recording is active
      * The src-mic, src-amp must be enable before AEC enable, because
      * the endpoint sequence control.
-     *
-     * The stream 0 should be enable at last moment for the data alignment.
      */
     if (stdev->is_mic_route_enabled == true) {
         // recover src package if sound trigger recording is active
@@ -1661,38 +1660,39 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
         if (err != 0) {
             ALOGE("Failed to restart SRC-mic route");
         }
-    }
+        /*
+         * RX stream was enabled during codec recovery.
+         * Need to setup the barge-in package and routing.
+         */
+        if (stdev->rx_active_count > 0) {
+            stdev->is_bargein_route_enabled = true;
+            ct = EXTERNAL_OSCILLATOR;
+            if (is_mic_controlled_by_ahal(stdev) == true) {
+                strmt = STRM_48K;
+            }
+            err = setup_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
+            if (err != 0) {
+                ALOGE("failed to load SRC package");
+            }
+            err = enable_src_route(stdev->route_hdl, true, SRC_AMP_REF);
+            if (err != 0) {
+                ALOGE("Failed to restart SRC-amp route");
+            }
 
-    if (stdev->rx_active_count > 0 &&
-        stdev->is_bargein_route_enabled == true) {
-        ct = EXTERNAL_OSCILLATOR;
-        if (is_mic_controlled_by_ahal(stdev) == true) {
-            strmt = STRM_48K;
+            err = setup_aec_package(stdev->odsp_hdl);
+            if (err != 0) {
+                ALOGE("Failed to restart AEC package");
+            }
+            err = enable_bargein_route(stdev->route_hdl, true);
+            if (err != 0) {
+                ALOGE("Failed to restart bargein route");
+            }
+            err = enable_amp_ref_route(stdev->route_hdl, true, strmt);
+            if (err != 0) {
+                ALOGE("Failed to restart amp-ref route");
+            }
         }
-        err = setup_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
-        if (err != 0) {
-            ALOGE("failed to load SRC package");
-        }
-        err = enable_src_route(stdev->route_hdl, true, SRC_AMP_REF);
-        if (err != 0) {
-            ALOGE("Failed to restart SRC-amp route");
-        }
-
-        err = setup_aec_package(stdev->odsp_hdl);
-        if (err != 0) {
-            ALOGE("Failed to restart AEC package");
-        }
-        err = enable_bargein_route(stdev->route_hdl, true);
-        if (err != 0) {
-            ALOGE("Failed to restart bargein route");
-        }
-        err = enable_amp_ref_route(stdev->route_hdl, true, strmt);
-        if (err != 0) {
-            ALOGE("Failed to restart amp-ref route");
-        }
-    }
-
-    if (stdev->is_mic_route_enabled == true) {
+        // The stream 0 should be enable at last moment for the data alignment.
         if (is_mic_controlled_by_ahal(stdev) == false) {
             err = enable_mic_route(stdev->route_hdl, true, ct);
             if (err != 0) {
