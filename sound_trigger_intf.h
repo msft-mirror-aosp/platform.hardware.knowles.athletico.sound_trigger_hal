@@ -17,6 +17,7 @@
 #ifndef SOUND_TRIGGER_INTF_H
 #define SOUND_TRIGGER_INTF_H
 
+#include <cutils/list.h>
 #include <hardware/sound_trigger.h>
 #include "tinyalsa/asoundlib.h"
 
@@ -128,8 +129,14 @@ struct sound_trigger_get_param_data {
     struct str_parms *reply;
 };
 
+struct audio_device_info {
+    struct listnode list;
+    audio_devices_t type;
+    char address[AUDIO_DEVICE_MAX_ADDRESS_LEN];
+};
+
 struct sound_trigger_device_info {
-    int device;
+    struct listnode devices;
 };
 
 struct audio_event_info {
