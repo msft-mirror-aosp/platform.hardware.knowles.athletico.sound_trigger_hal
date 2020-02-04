@@ -1312,6 +1312,65 @@ exit:
     return err;
 }
 
+// Helper functions for audio_device_info
+
+int list_length(const struct listnode *list)
+{
+    struct listnode *node;
+    int length = 0;
+
+    if (list == NULL) {
+        return 0;
+    }
+
+    list_for_each (node, list) {
+        ++length;
+    }
+    return length;
+}
+
+/*
+ * If single device in devices list is equal to passed type
+ * type should represent a single device.
+ */
+bool is_single_device_type_equal(struct listnode *devices,
+                                 audio_devices_t type)
+{
+    if (devices == NULL)
+        return false;
+
+    if (list_length(devices) == 1) {
+        struct listnode *node = devices->next;
+        struct audio_device_info *item = node_to_item(node, struct audio_device_info, list);
+        if (item != NULL && (item->type == type))
+            return true;
+    }
+    return false;
+}
+
+/*
+ * Check if a device with given type is present in devices list
+ */
+bool compare_device_type(struct listnode *devices, audio_devices_t device_type)
+{
+    struct listnode *node;
+    struct audio_device_info *item = NULL;
+
+    if (devices == NULL)
+        return false;
+
+    list_for_each (node, devices) {
+        item = node_to_item(node, struct audio_device_info, list);
+        if (item != NULL && (item->type == device_type)) {
+            ALOGV("%s: device types %d match", __func__, device_type);
+            return true;
+        }
+    }
+    return false;
+}
+
+// End of helper functions for audio_device_info
+
 static void update_rx_conditions(struct knowles_sound_trigger_device *stdev,
                                  audio_event_type_t event,
                                  struct audio_event_info *config)
@@ -1323,7 +1382,7 @@ static void update_rx_conditions(struct knowles_sound_trigger_device *stdev,
             ALOGW("%s: unexpected rx inactive event", __func__);
         }
     } else if (event == AUDIO_EVENT_PLAYBACK_STREAM_ACTIVE) {
-        if (!(config->device_info.device & AUDIO_DEVICE_OUT_SPEAKER)) {
+        if (!compare_device_type(&config->device_info.devices, AUDIO_DEVICE_OUT_SPEAKER)) {
             ALOGD("%s: Playback device doesn't include SPEAKER.",
                   __func__);
         } else {
@@ -1385,7 +1444,7 @@ static void update_sthal_conditions(struct knowles_sound_trigger_device *stdev,
         if (stdev->is_concurrent_capture == true &&
             stdev->is_ahal_in_voice_voip_mode == false &&
             stdev->is_con_mic_route_enabled == false &&
-            config->device_info.device == ST_DEVICE_HANDSET_MIC) {
+            is_single_device_type_equal(&config->device_info.devices, ST_DEVICE_HANDSET_MIC)) {
             ALOGD("%s: enable mic concurrency", __func__);
                   stdev->is_con_mic_route_enabled = true;
         }
