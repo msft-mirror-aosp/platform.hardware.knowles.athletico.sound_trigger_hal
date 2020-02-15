@@ -142,7 +142,6 @@ struct knowles_sound_trigger_device {
     int opened;
     int send_sock;
     int recv_sock;
-    struct sound_trigger_recognition_config *last_keyword_detected_config;
 
     // Information about streaming
     int is_streaming;
@@ -2514,11 +2513,13 @@ static void *callback_thread_loop(void *context)
 
                             ALOGD("Sending recognition callback for id %d",
                                 kwid);
+                            /* Exit the critical section of interaction with
+                             * firmware, release the lock to avoid deadlock
+                             * when processing recognition event */
+                            pthread_mutex_unlock(&stdev->lock);
                             model->recognition_callback(&event->common,
                                                     model->recognition_cookie);
-                            // Update the config so that it will be used
-                            // during the streaming
-                            stdev->last_keyword_detected_config = model->config;
+                            pthread_mutex_lock(&stdev->lock);
 
                             free(event);
                         } else {
@@ -2538,12 +2539,13 @@ static void *callback_thread_loop(void *context)
 
                             ALOGD("Sending recognition callback for id %d",
                                 kwid);
+                            /* Exit the critical section of interaction with
+                             * firmware, release the lock to avoid deadlock
+                             * when processing recognition event */
+                            pthread_mutex_unlock(&stdev->lock);
                             model->recognition_callback(&event->common,
                                                     model->recognition_cookie);
-                            // Update the config so that it will be used
-                            // during the streaming
-                            stdev->last_keyword_detected_config = model->config;
-
+                            pthread_mutex_lock(&stdev->lock);
                             free(event);
                         } else {
                             ALOGE("Failed to allocate memory for the event");
@@ -3217,20 +3219,6 @@ exit:
     return ret;
 }
 
-__attribute__ ((visibility ("default")))
-audio_io_handle_t stdev_get_audio_handle()
-{
-    if (g_stdev.last_keyword_detected_config == NULL) {
-        ALOGI("%s: Config is NULL so returning audio handle as 0", __func__);
-        return 0;
-    }
-
-    ALOGI("%s: Audio Handle is %d",
-        __func__, g_stdev.last_keyword_detected_config->capture_handle);
-
-    return g_stdev.last_keyword_detected_config->capture_handle;
-}
-
 static int open_streaming_lib(struct knowles_sound_trigger_device *stdev) {
     int ret = 0;
 
@@ -3499,7 +3487,6 @@ static int stdev_open(const hw_module_t *module, const char *name,
         stdev->models[i].data_sz = 0;
         stdev->models[i].is_loaded = false;
         stdev->models[i].is_active = false;
-        stdev->last_keyword_detected_config = NULL;
         stdev->models[i].is_state_query = false;
     }
 
@@ -3841,6 +3828,12 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                 index = i;
                 break;
             }
+        }
+
+        /* There is not valid model to provide pcm samples. */
+        if (i == MAX_MODELS) {
+            ret = -EINVAL;
+            goto exit;
         }
 
         /* Open Stream Driver */
