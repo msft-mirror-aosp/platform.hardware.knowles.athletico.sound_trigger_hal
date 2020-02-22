@@ -111,6 +111,10 @@
 #define AMBIENT_UNLOAD_PARAM_ID          1
 #define AMBIENT_RESET_PARAM_ID           2
 #define AMBIENT_GET_MODEL_STATE_PARAM_ID 7
+#define HOTWORD_GET_VERSION_PARAM_ID     8
+#define AMBIENT_GET_VERSION_PARAM_ID     8
+#define HOTWORD_DEFAULT_VER              0
+#define AMBIENT_DEFAULT_VER              0
 
 #define BUFFER_PACKAGE              "BufferPackage.bin"
 #define BUFFER_CONFIG_OSLO_VAL      "BufferConfigValOslo.bin"
@@ -198,8 +202,10 @@ int setup_buffer_package(struct iaxxx_odsp_hw *odsp_hdl);
 int destroy_buffer_package(struct iaxxx_odsp_hw *odsp_hdl);
 int setup_hotword_package(struct iaxxx_odsp_hw *odsp_hdl);
 int destroy_hotword_package(struct iaxxx_odsp_hw *odsp_hdl);
+unsigned int get_hotword_version(struct iaxxx_odsp_hw *odsp_hdl);
 int setup_ambient_package(struct iaxxx_odsp_hw *odsp_hdl);
 int destroy_ambient_package(struct iaxxx_odsp_hw *odsp_hdl);
+unsigned int get_ambient_version(struct iaxxx_odsp_hw *odsp_hdl);
 int setup_aec_package(struct iaxxx_odsp_hw *odsp_hdl);
 int destroy_aec_package(struct iaxxx_odsp_hw *odsp_hdl);
 int setup_chre_package(struct iaxxx_odsp_hw *odsp_hdl);
