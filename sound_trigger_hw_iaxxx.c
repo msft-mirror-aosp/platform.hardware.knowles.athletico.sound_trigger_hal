@@ -94,7 +94,7 @@
 static const struct sound_trigger_properties hw_properties = {
     "Knowles Electronics",      // implementor
     "Continous VoiceQ",         // description
-    1,                          // version
+    0,                          // version
     // Version UUID
     { 0x80f7dcd5, 0xbb62, 0x4816, 0xa931, {0x9c, 0xaa, 0x52, 0x5d, 0xf5, 0xc7}},
     MAX_MODELS,                 // max_sound_models
@@ -108,6 +108,10 @@ static const struct sound_trigger_properties hw_properties = {
     false,                      // trigger_in_event
     POWER_CONSUMPTION           // power_consumption_mw
 };
+
+const char codec_arch[SOUND_TRIGGER_MAX_STRING_LEN] = "hemidelta_athletico";
+
+static struct sound_trigger_properties_extended_1_3 hw_properties_1_3;
 
 struct model_info {
     void *recognition_cookie;
@@ -142,7 +146,6 @@ struct knowles_sound_trigger_device {
     int opened;
     int send_sock;
     int recv_sock;
-    struct sound_trigger_recognition_config *last_keyword_detected_config;
 
     // Information about streaming
     int is_streaming;
@@ -205,6 +208,7 @@ struct knowles_sound_trigger_device {
     // Chre stop signal event
     timer_t chre_timer;
     bool chre_timer_created;
+    unsigned int hotword_version;
 };
 
 /*
@@ -2312,6 +2316,8 @@ static void *callback_thread_loop(void *context)
 
     if (fw_status == IAXXX_FW_ACTIVE) {
         stdev->is_st_hal_ready = false;
+        // query version during reset progress.
+        stdev->hotword_version = get_hotword_version(stdev->odsp_hdl);
         // reset the firmware and wait for firmware download complete
         err = reset_fw(stdev->odsp_hdl);
         if (err == -1) {
@@ -2323,16 +2329,29 @@ static void *callback_thread_loop(void *context)
         // Firmware has crashed wait till it recovers
         stdev->is_st_hal_ready = false;
     } else if (fw_status == IAXXX_FW_IDLE) {
-        stdev->route_hdl = audio_route_init(stdev->snd_crd_num,
+        stdev->hotword_version = get_hotword_version(stdev->odsp_hdl);
+        if (stdev->hotword_version == HOTWORD_DEFAULT_VER) {
+            /* This is unlikely use-case, the codec is abnormal at the beginning
+             * reset_fw the firmware to recovery.
+             */
+            stdev->is_st_hal_ready = false;
+            err = reset_fw(stdev->odsp_hdl);
+            if (err == -1) {
+                ALOGE("%s: ERROR: Failed to reset the firmware %d(%s)",
+                      __func__, errno, strerror(errno));
+            }
+            stdev->fw_reset_done_by_hal = true;
+        } else {
+            stdev->route_hdl = audio_route_init(stdev->snd_crd_num,
                                             stdev->mixer_path_xml);
-        if (stdev->route_hdl == NULL) {
-            ALOGE("Failed to init the audio_route library");
-            goto exit;
+            if (stdev->route_hdl == NULL) {
+                ALOGE("Failed to init the audio_route library");
+                goto exit;
+            }
+            set_default_apll_clk(stdev->mixer);
+            setup_slpi_wakeup_event(stdev->odsp_hdl, true);
+            stdev->is_st_hal_ready = true;
         }
-
-        set_default_apll_clk(stdev->mixer);
-        setup_slpi_wakeup_event(stdev->odsp_hdl, true);
-        stdev->is_st_hal_ready = true;
     }
     pthread_mutex_unlock(&stdev->lock);
 
@@ -2514,11 +2533,13 @@ static void *callback_thread_loop(void *context)
 
                             ALOGD("Sending recognition callback for id %d",
                                 kwid);
+                            /* Exit the critical section of interaction with
+                             * firmware, release the lock to avoid deadlock
+                             * when processing recognition event */
+                            pthread_mutex_unlock(&stdev->lock);
                             model->recognition_callback(&event->common,
                                                     model->recognition_cookie);
-                            // Update the config so that it will be used
-                            // during the streaming
-                            stdev->last_keyword_detected_config = model->config;
+                            pthread_mutex_lock(&stdev->lock);
 
                             free(event);
                         } else {
@@ -2538,12 +2559,13 @@ static void *callback_thread_loop(void *context)
 
                             ALOGD("Sending recognition callback for id %d",
                                 kwid);
+                            /* Exit the critical section of interaction with
+                             * firmware, release the lock to avoid deadlock
+                             * when processing recognition event */
+                            pthread_mutex_unlock(&stdev->lock);
                             model->recognition_callback(&event->common,
                                                     model->recognition_cookie);
-                            // Update the config so that it will be used
-                            // during the streaming
-                            stdev->last_keyword_detected_config = model->config;
-
+                            pthread_mutex_lock(&stdev->lock);
                             free(event);
                         } else {
                             ALOGE("Failed to allocate memory for the event");
@@ -2592,6 +2614,28 @@ static int stdev_get_properties(
     ALOGV("-%s-", __func__);
     return 0;
 }
+
+static const struct sound_trigger_properties_header* stdev_get_properties_extended(
+                            const struct sound_trigger_hw_device *dev __unused)
+{
+    struct knowles_sound_trigger_device *stdev =
+          (struct knowles_sound_trigger_device *)dev;
+    ALOGV("+%s+", __func__);
+
+    if (hw_properties_1_3.header.version >= SOUND_TRIGGER_DEVICE_API_VERSION_1_3) {
+        hw_properties_1_3.base.version = stdev->hotword_version;
+        ALOGW("SoundTrigger hotword Version is %u",
+              hw_properties_1_3.base.version);
+    } else {
+        ALOGE("STHAL Version is %u", hw_properties_1_3.header.version);
+        return NULL;
+    }
+
+
+    ALOGV("-%s-", __func__);
+    return &hw_properties_1_3.header;
+}
+
 
 static int stop_recognition(struct knowles_sound_trigger_device *stdev,
                             sound_model_handle_t handle)
@@ -3072,6 +3116,36 @@ exit:
     return status;
 }
 
+static int stdev_start_recognition_extended(
+                        const struct sound_trigger_hw_device *dev,
+                        sound_model_handle_t sound_model_handle,
+                        const struct sound_trigger_recognition_config_header *header,
+                        recognition_callback_t callback,
+                        void *cookie)
+{
+    struct sound_trigger_recognition_config_extended_1_3 *config_1_3 =
+                 (struct sound_trigger_recognition_config_extended_1_3 *)header;
+
+    if (header->version >= SOUND_TRIGGER_DEVICE_API_VERSION_1_3) {
+        /* Use old version before we have real usecase */
+        ALOGD("%s: Running 2_3", __func__);
+        stdev_start_recognition(dev, sound_model_handle,
+                                &config_1_3->base,
+                                callback,
+                                cookie);
+    } else {
+        /* Rollback into old start recognition */
+        ALOGD("%s: Running 2_1", __func__);
+        stdev_start_recognition(dev, sound_model_handle,
+                                &config_1_3->base,
+                                callback,
+                                cookie);
+    }
+
+    return 0;
+}
+
+
 static int stdev_stop_recognition(
                         const struct sound_trigger_hw_device *dev,
                         sound_model_handle_t handle)
@@ -3173,6 +3247,38 @@ exit:
     return ret;
 }
 
+static int stdev_query_parameter(
+                    const struct sound_trigger_hw_device *dev __unused,
+                    sound_model_handle_t sound_model_handle __unused,
+                    sound_trigger_model_parameter_t model_param __unused,
+                    sound_trigger_model_parameter_range_t* param_range)
+{
+    ALOGW("%s: NOT SUPPORTED", __func__);
+    param_range->is_supported = false;
+    return 0;
+}
+
+static int stdev_set_parameter(
+                           const struct sound_trigger_hw_device *dev __unused,
+                           sound_model_handle_t sound_model_handle __unused,
+                           sound_trigger_model_parameter_t model_param __unused,
+                           int32_t value __unused)
+{
+    ALOGW("%s: NOT SUPPORTED", __func__);
+    return -EINVAL;
+}
+
+static int stdev_get_parameter(
+                           const struct sound_trigger_hw_device *dev __unused,
+                           sound_model_handle_t sound_model_handle __unused,
+                           sound_trigger_model_parameter_t model_param __unused,
+                           int32_t* value __unused)
+{
+    ALOGW("%s: NOT SUPPORTED", __func__);
+    return -EINVAL;
+}
+
+
 static int stdev_close(hw_device_t *device)
 {
     struct knowles_sound_trigger_device *stdev =
@@ -3215,20 +3321,6 @@ exit:
     pthread_mutex_unlock(&stdev->lock);
     ALOGD("-%s-", __func__);
     return ret;
-}
-
-__attribute__ ((visibility ("default")))
-audio_io_handle_t stdev_get_audio_handle()
-{
-    if (g_stdev.last_keyword_detected_config == NULL) {
-        ALOGI("%s: Config is NULL so returning audio handle as 0", __func__);
-        return 0;
-    }
-
-    ALOGI("%s: Audio Handle is %d",
-        __func__, g_stdev.last_keyword_detected_config->capture_handle);
-
-    return g_stdev.last_keyword_detected_config->capture_handle;
 }
 
 static int open_streaming_lib(struct knowles_sound_trigger_device *stdev) {
@@ -3479,15 +3571,20 @@ static int stdev_open(const hw_module_t *module, const char *name,
     }
 
     stdev->device.common.tag = HARDWARE_DEVICE_TAG;
-    stdev->device.common.version = SOUND_TRIGGER_DEVICE_API_VERSION_1_2;
+    stdev->device.common.version = SOUND_TRIGGER_DEVICE_API_VERSION_1_3;
     stdev->device.common.module = (struct hw_module_t *)module;
     stdev->device.common.close = stdev_close;
     stdev->device.get_properties = stdev_get_properties;
     stdev->device.load_sound_model = stdev_load_sound_model;
     stdev->device.unload_sound_model = stdev_unload_sound_model;
     stdev->device.start_recognition = stdev_start_recognition;
+    stdev->device.start_recognition_extended = stdev_start_recognition_extended;
     stdev->device.stop_recognition = stdev_stop_recognition;
     stdev->device.get_model_state = stdev_get_model_state;
+    stdev->device.query_parameter = stdev_query_parameter;
+    stdev->device.set_parameter = stdev_set_parameter;
+    stdev->device.get_parameter = stdev_get_parameter;
+    stdev->device.get_properties_extended = stdev_get_properties_extended;
 
     stdev->opened = true;
     /* Initialize all member variable */
@@ -3499,7 +3596,6 @@ static int stdev_open(const hw_module_t *module, const char *name,
         stdev->models[i].data_sz = 0;
         stdev->models[i].is_loaded = false;
         stdev->models[i].is_active = false;
-        stdev->last_keyword_detected_config = NULL;
         stdev->models[i].is_state_query = false;
     }
 
@@ -3528,6 +3624,16 @@ static int stdev_open(const hw_module_t *module, const char *name,
 
     stdev->snd_crd_num = snd_card_num;
     stdev->fw_reset_done_by_hal = false;
+    stdev->hotword_version = 0;
+
+    hw_properties_1_3.header.version = SOUND_TRIGGER_DEVICE_API_VERSION_1_3;
+    hw_properties_1_3.header.size =
+                        sizeof(struct sound_trigger_properties_extended_1_3);
+    memcpy(&hw_properties_1_3.base, &hw_properties,
+           sizeof(struct sound_trigger_properties));
+    snprintf(hw_properties_1_3.supported_model_arch,
+             SOUND_TRIGGER_MAX_STRING_LEN, codec_arch);
+    hw_properties_1_3.audio_capabilities = 0;
 
     str_to_uuid(HOTWORD_AUDIO_MODEL, &stdev->hotword_model_uuid);
     str_to_uuid(WAKEUP_MODEL, &stdev->wakeup_model_uuid);
@@ -3841,6 +3947,12 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                 index = i;
                 break;
             }
+        }
+
+        /* There is not valid model to provide pcm samples. */
+        if (i == MAX_MODELS) {
+            ret = -EINVAL;
+            goto exit;
         }
 
         /* Open Stream Driver */
