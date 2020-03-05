@@ -162,7 +162,6 @@ struct knowles_sound_trigger_device {
 
     int last_detected_model_type;
     bool is_mic_route_enabled;
-    bool is_music_playing;
     bool is_bargein_route_enabled;
     bool is_chre_loaded;
     bool is_buffer_package_loaded;
@@ -184,6 +183,7 @@ struct knowles_sound_trigger_device {
 
     unsigned int current_enable;
     unsigned int recover_model_list;
+    unsigned int rx_active_count;
     transit_case_t transit_case;
 
     struct audio_route *route_hdl;
@@ -1050,10 +1050,10 @@ static int tear_package_route(struct knowles_sound_trigger_device *stdev,
 static int async_setup_aec(struct knowles_sound_trigger_device *stdev)
 {
     int ret = 0;
-    if (stdev->is_music_playing == true &&
+    if (stdev->rx_active_count > 0 &&
         stdev->is_bargein_route_enabled != true &&
         stdev->is_mic_route_enabled != false) {
-        ALOGD("%s: Bargein enable", __func__);
+        ALOGD("%s: Bargein enabling", __func__);
         if (is_mic_controlled_by_ahal(stdev) == false) {
             ret = enable_mic_route(stdev->route_hdl, false,
                                 INTERNAL_OSCILLATOR);
@@ -1157,6 +1157,8 @@ static int async_setup_aec(struct knowles_sound_trigger_device *stdev)
                 }
             }
         }
+    } else {
+        ALOGD("%s: Bargein is already enabled", __func__);
     }
 
 exit:
@@ -1170,7 +1172,7 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
     enum clock_type ct = INTERNAL_OSCILLATOR;
     enum strm_type strmt = STRM_16K;
 
-    if (stdev->is_music_playing == true) {
+    if (stdev->rx_active_count > 0) {
         ct = EXTERNAL_OSCILLATOR;
     }
 
@@ -1200,7 +1202,7 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
                 goto exit;
             }
         }
-        if (stdev->is_music_playing == true &&
+        if (stdev->rx_active_count > 0 &&
             stdev->is_bargein_route_enabled == false) {
             err = setup_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
             if (err != 0) {
@@ -1246,7 +1248,7 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
     } else {
         if (!is_any_model_active(stdev)) {
             ALOGD("None of keywords are active");
-            if (stdev->is_music_playing == true &&
+            if (stdev->rx_active_count > 0 &&
                 stdev->is_bargein_route_enabled == true) {
                 // Just disable the route and update the route status but retain
                 // bargein status
@@ -1309,6 +1311,31 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
 exit:
     return err;
 }
+
+static void update_rx_conditions(struct knowles_sound_trigger_device *stdev,
+                                 audio_event_type_t event,
+                                 struct audio_event_info *config)
+{
+    if (event == AUDIO_EVENT_PLAYBACK_STREAM_INACTIVE) {
+        if (stdev->rx_active_count > 0) {
+            stdev->rx_active_count--;
+        } else {
+            ALOGW("%s: unexpected rx inactive event", __func__);
+        }
+    } else if (event == AUDIO_EVENT_PLAYBACK_STREAM_ACTIVE) {
+        if (!(config->device_info.device & AUDIO_DEVICE_OUT_SPEAKER)) {
+            ALOGD("%s: Playback device doesn't include SPEAKER.",
+                  __func__);
+        } else {
+            stdev->rx_active_count++;
+        }
+    } else {
+        ALOGW("%s: invalid event %d", __func__, event);
+    }
+    ALOGD("%s: updated rx_concurrency as %d", __func__,
+          stdev->rx_active_count);
+}
+
 
 static void update_sthal_conditions(struct knowles_sound_trigger_device *stdev,
                                     audio_event_type_t event,
@@ -1568,9 +1595,18 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
     stdev->hotword_buffer_enable = 0;
     stdev->music_buffer_enable = 0;
 
-    if (stdev->is_music_playing == true &&
+    if (stdev->rx_active_count == 0 &&
         stdev->is_bargein_route_enabled == true) {
-        ct = EXTERNAL_OSCILLATOR;
+        /* rx stream is disabled during codec recovery.
+         * Need to reset the enabled flag
+         */
+        stdev->is_bargein_route_enabled = false;
+    } else if (stdev->rx_active_count > 0 &&
+               stdev->is_bargein_route_enabled == false) {
+        /* rx stream is enabled during codec recovery.
+         * Need to raise the enabled flag
+         */
+        stdev->is_bargein_route_enabled = true;
     }
 
     if (stdev->is_buffer_package_loaded == true) {
@@ -1588,51 +1624,14 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
     }
 
     /*
-     * If ST mode is IN_CALL, tear all route and they will be
-     * reloaded after ending the call
+     * If ST mode is IN_CALL, make sure mic route as false,
+     * that would be reloaded after ending the call
      */
     if (get_sthal_mode(stdev) == IN_CALL) {
         ALOGD("%s: ST mode is in_call, reset all routes", __func__);
-        err = enable_mic_route(stdev->route_hdl, false, ct);
-        if (err != 0) {
-            ALOGE("failed to tear mic route");
-        }
+
         stdev->is_mic_route_enabled = false;
 
-        err = enable_src_route(stdev->route_hdl, false, SRC_MIC);
-        if (err != 0) {
-            ALOGE("Failed to tear SRC-mic route");
-        }
-        if (stdev->is_music_playing == true &&
-            stdev->is_bargein_route_enabled == true) {
-            err = enable_amp_ref_route(stdev->route_hdl, false, strmt);
-            if (err != 0) {
-                ALOGE("Failed to tear amp-ref route");
-            }
-            err = enable_src_route(stdev->route_hdl, false, SRC_AMP_REF);
-            if (err != 0) {
-                ALOGE("Failed to tear SRC-amp route");
-            }
-            err = enable_bargein_route(stdev->route_hdl, false);
-            if (err != 0) {
-                ALOGE("Failed to tear bargein route");
-            }
-        }
-        // reset model route
-        for (i = 0; i < MAX_MODELS; i++) {
-            if (check_uuid_equality(stdev->models[i].uuid, stdev->hotword_model_uuid) ||
-                (check_uuid_equality(stdev->models[i].uuid, stdev->wakeup_model_uuid))) {
-                tear_hotword_buffer_route(stdev->route_hdl,
-                                          stdev->is_bargein_route_enabled);
-            }
-            if (check_uuid_equality(stdev->models[i].uuid, stdev->ambient_model_uuid) ||
-                (check_uuid_equality(stdev->models[i].uuid, stdev->entity_model_uuid))) {
-                tear_music_buffer_route(stdev->route_hdl,
-                                        stdev->is_bargein_route_enabled);
-            }
-            tear_package_route(stdev, stdev->models[i].uuid,
-                               stdev->is_bargein_route_enabled);
-        }
         // if chre enabled before crash during call, need to setup package for SLPI.
         if (stdev->is_chre_loaded == true) {
             err = setup_chre_package(stdev->odsp_hdl);
@@ -1658,28 +1657,21 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
         if (err != 0) {
             ALOGE("failed to load SRC package");
         }
-        err = enable_src_route(stdev->route_hdl, false, SRC_MIC);
-        if (err != 0) {
-            ALOGE("Failed to tear SRC-mic route");
-        }
         err = enable_src_route(stdev->route_hdl, true, SRC_MIC);
         if (err != 0) {
             ALOGE("Failed to restart SRC-mic route");
         }
     }
 
-    if (stdev->is_music_playing == true &&
+    if (stdev->rx_active_count > 0 &&
         stdev->is_bargein_route_enabled == true) {
+        ct = EXTERNAL_OSCILLATOR;
         if (is_mic_controlled_by_ahal(stdev) == true) {
             strmt = STRM_48K;
         }
         err = setup_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
         if (err != 0) {
             ALOGE("failed to load SRC package");
-        }
-        err = enable_src_route(stdev->route_hdl, false, SRC_AMP_REF);
-        if (err != 0) {
-            ALOGE("Failed to tear SRC-amp route");
         }
         err = enable_src_route(stdev->route_hdl, true, SRC_AMP_REF);
         if (err != 0) {
@@ -1690,17 +1682,9 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
         if (err != 0) {
             ALOGE("Failed to restart AEC package");
         }
-        err = enable_bargein_route(stdev->route_hdl, false);
-        if (err != 0) {
-            ALOGE("Failed to tear bargein route");
-        }
         err = enable_bargein_route(stdev->route_hdl, true);
         if (err != 0) {
             ALOGE("Failed to restart bargein route");
-        }
-        err = enable_amp_ref_route(stdev->route_hdl, false, strmt);
-        if (err != 0) {
-            ALOGE("Failed to tear amp-ref route");
         }
         err = enable_amp_ref_route(stdev->route_hdl, true, strmt);
         if (err != 0) {
@@ -1710,10 +1694,6 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
 
     if (stdev->is_mic_route_enabled == true) {
         if (is_mic_controlled_by_ahal(stdev) == false) {
-            err = enable_mic_route(stdev->route_hdl, false, ct);
-            if (err != 0) {
-                ALOGE("failed to tear mic route");
-            }
             err = enable_mic_route(stdev->route_hdl, true, ct);
             if (err != 0) {
                 ALOGE("failed to restart mic route");
@@ -1732,8 +1712,6 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
                 if ((stdev->hotword_buffer_enable) &&
                     (!(stdev->current_enable & HOTWORD_MASK) ||
                       (stdev->current_enable & WAKEUP_MASK))) {
-                    tear_hotword_buffer_route(stdev->route_hdl,
-                                            stdev->is_bargein_route_enabled);
                     set_hotword_buffer_route(stdev->route_hdl,
                                             stdev->is_bargein_route_enabled);
                 }
@@ -1743,15 +1721,11 @@ static int restart_recognition(struct knowles_sound_trigger_device *stdev)
                 if ((stdev->music_buffer_enable) &&
                     (!(stdev->current_enable & AMBIENT_MASK) ||
                       (stdev->current_enable & ENTITY_MASK))) {
-                    tear_music_buffer_route(stdev->route_hdl,
-                                        stdev->is_bargein_route_enabled);
                     set_music_buffer_route(stdev->route_hdl,
                                         stdev->is_bargein_route_enabled);
                 }
             }
             setup_package(stdev, &stdev->models[i]);
-            tear_package_route(stdev, stdev->models[i].uuid,
-                            stdev->is_bargein_route_enabled);
             set_package_route(stdev, stdev->models[i].uuid,
                             stdev->is_bargein_route_enabled);
         }
@@ -1764,13 +1738,6 @@ reload_oslo:
         if (stdev->models[i].is_loaded == true) {
             if (check_uuid_equality(stdev->models[i].uuid,
                                     stdev->sensor_model_uuid)) {
-                err = set_sensor_route(stdev->route_hdl, false);
-                if (err != 0) {
-                    ALOGE("%s: tear Sensor route fail", __func__);
-                    goto exit;
-                }
-                stdev->is_sensor_route_enabled = false;
-
                 // setup the sensor route
                 err = setup_sensor_package(stdev->odsp_hdl);
                 if (err != 0) {
@@ -1908,6 +1875,7 @@ static void sensor_timeout_recover()
                 ALOGE("%s: ERROR: Failed to reset the firmware %d(%s)",
                       __func__, errno, strerror(errno));
             }
+            reset_all_route(stdev->route_hdl);
             sensor_crash_handler(stdev);
         }
     }
@@ -2149,6 +2117,7 @@ static void chre_timeout_recover()
                 ALOGE("%s: ERROR: Failed to reset the firmware %d(%s)",
                       __func__, errno, strerror(errno));
             }
+            reset_all_route(stdev->route_hdl);
             chre_crash_handler(stdev);
         }
     }
@@ -2421,6 +2390,7 @@ static void *callback_thread_loop(void *context)
                     ALOGD("Firmware has crashed");
                     // Don't allow any op on ST HAL until recovery is complete
                     stdev->is_st_hal_ready = false;
+                    reset_all_route(stdev->route_hdl);
                     stdev->is_streaming = 0;
 
                     // Firmware crashed, clear CHRE/Oslo timer and flags here
@@ -2591,6 +2561,7 @@ static int stop_recognition(struct knowles_sound_trigger_device *stdev,
     }
     if (can_update_recover_list(stdev) == true) {
         update_recover_list(stdev, handle, false);
+        model->is_active = false;
         goto exit;
     }
 
@@ -3478,7 +3449,6 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->is_ahal_in_voice_voip_mode = false;
     stdev->is_ahal_voice_voip_stop = false;
     stdev->is_ahal_voice_voip_start = false;
-    stdev->is_music_playing = false;
     stdev->is_bargein_route_enabled = false;
     stdev->is_chre_loaded = false;
     stdev->is_buffer_package_loaded = false;
@@ -3487,6 +3457,7 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->current_enable = 0;
     stdev->is_sensor_route_enabled = false;
     stdev->recover_model_list = 0;
+    stdev->rx_active_count = 0;
     stdev->is_ahal_media_recording = false;
     stdev->is_concurrent_capture = hw_properties.concurrent_capture;
 
@@ -3581,6 +3552,12 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
         cur_mode = get_sthal_mode(stdev);
     }
 
+    // update conditions for bargein whatever firmware status may be.
+    if (event == AUDIO_EVENT_PLAYBACK_STREAM_INACTIVE ||
+        event == AUDIO_EVENT_PLAYBACK_STREAM_ACTIVE) {
+        update_rx_conditions(stdev, event, config);
+    }
+
     if (stdev->is_st_hal_ready == false) {
         ALOGE("%s: ST HAL is not ready yet", __func__);
         ret = -EINVAL;
@@ -3605,14 +3582,13 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
     case AUDIO_EVENT_PLAYBACK_STREAM_INACTIVE:
         ALOGD("%s: handle playback stream inactive", __func__);
 
-        if (stdev->is_music_playing != false) {
-            stdev->is_music_playing = false;
+        if (stdev->rx_active_count == 0) {
             if (stdev->is_mic_route_enabled != false) {
                 // Atleast one keyword model is active so update the routes
                 // Check if the bargein route is enabled if not enable bargein route
                 // Check each model, if it is active then update it's route
                 if (stdev->is_bargein_route_enabled != false) {
-                    ALOGD("Bargein disable");
+                    ALOGD("Bargein disabling");
                     stdev->is_bargein_route_enabled = false;
                     // Check each model, if it is active then update it's route
                     // Disable the bargein route
@@ -3718,21 +3694,18 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                             goto exit;
                         }
                     }
+                } else {
+                    ALOGW("%s: barge-in isn't enabled", __func__);
                 }
             }
         } else {
-            ALOGD("%s: STHAL setup playback Inactive alrealy", __func__);
+            ALOGD("%s: rx stream is still active", __func__);
         }
         break;
     case AUDIO_EVENT_PLAYBACK_STREAM_ACTIVE:
         ALOGD("%s: handle playback stream active", __func__);
-        if (!(config->device_info.device & AUDIO_DEVICE_OUT_SPEAKER)) {
-            ALOGD("%s: Playback device doesn't include SPEAKER.",
-                __func__);
-            goto exit;
-        }
-        if (stdev->is_music_playing != true) {
-            stdev->is_music_playing = true;
+
+        if (stdev->rx_active_count > 0) {
             if (stdev->is_mic_route_enabled != false) {
                 // Atleast one keyword model is active so update the routes
                 // Check if the bargein route is enabled if not enable bargein route
@@ -3741,7 +3714,7 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                 pthread_cond_signal(&stdev->transition_cond);
             }
         } else {
-            ALOGD("%s: STHAL setup playback active alrealy", __func__);
+            ALOGW("%s: unexpeted stream active event", __func__);
         }
         break;
     case AUDIO_EVENT_STOP_LAB:
