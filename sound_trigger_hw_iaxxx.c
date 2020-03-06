@@ -83,6 +83,8 @@
 #define CHRE_CREATE_WAIT_TIME_IN_S   (1)
 #define CHRE_CREATE_WAIT_MAX_COUNT   (5)
 
+#define FIRMWARE_READY_WAIT_TIME_IN_S   (4)
+
 #define ST_DEVICE_HANDSET_MIC 1
 
 #ifdef __LP64__
@@ -143,6 +145,7 @@ struct knowles_sound_trigger_device {
     pthread_cond_t tunnel_create;
     pthread_cond_t sensor_create;
     pthread_cond_t chre_create;
+    pthread_cond_t firmware_ready_cond;
     int opened;
     int send_sock;
     int recv_sock;
@@ -219,9 +222,11 @@ struct knowles_sound_trigger_device {
 static struct knowles_sound_trigger_device g_stdev =
 {
     .lock = PTHREAD_MUTEX_INITIALIZER,
+    .transition_cond = PTHREAD_COND_INITIALIZER,
     .tunnel_create = PTHREAD_COND_INITIALIZER,
     .sensor_create = PTHREAD_COND_INITIALIZER,
-    .chre_create = PTHREAD_COND_INITIALIZER
+    .chre_create = PTHREAD_COND_INITIALIZER,
+    .firmware_ready_cond = PTHREAD_COND_INITIALIZER
 };
 
 static struct timespec reset_time = {0};
@@ -600,6 +605,28 @@ static void update_recover_list(struct knowles_sound_trigger_device *stdev,
         stdev->recover_model_list &= ~mask;
 
     return;
+}
+
+int check_firmware_ready(struct knowles_sound_trigger_device *stdev)
+{
+    int err = 0;
+
+    if (stdev->is_st_hal_ready == false) {
+        struct timespec ts;
+        ALOGW("%s: ST HAL is not ready yet", __func__);
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += FIRMWARE_READY_WAIT_TIME_IN_S;
+        err = pthread_cond_timedwait(&stdev->firmware_ready_cond,
+                               &stdev->lock, &ts);
+        if (err == ETIMEDOUT) {
+            ALOGE("%s: WARNING: firmware downloading timed out after %ds",
+                  __func__, FIRMWARE_READY_WAIT_TIME_IN_S);
+            err = -ENODEV;
+        } else if (err != 0)
+            err = -EINVAL;
+    }
+
+    return err;
 }
 
 static int check_and_setup_src_package(
@@ -1969,7 +1996,7 @@ static int start_sensor_model(struct knowles_sound_trigger_device * stdev)
 
     // If firmware crashed when we are waiting
     if (stdev->is_st_hal_ready == false) {
-        err = -EAGAIN;
+        err = -ENODEV;
         goto exit;
     }
 
@@ -1977,7 +2004,7 @@ static int start_sensor_model(struct knowles_sound_trigger_device * stdev)
         ALOGE("%s: ERROR: Waited for %ds but we didn't get the event from "
               "Host 1, and fw reset is not yet complete", __func__,
               SENSOR_CREATE_WAIT_TIME_IN_S * SENSOR_CREATE_WAIT_MAX_COUNT);
-        err = -EAGAIN;
+        err = -ENODEV;
         goto exit;
     }
 
@@ -2067,7 +2094,7 @@ static int start_chre_model(struct knowles_sound_trigger_device *stdev,
 
     // If firmware crashed when we are waiting
     if (stdev->is_st_hal_ready == false) {
-        err = -EAGAIN;
+        err = -ENODEV;
         goto exit;
     }
 
@@ -2075,7 +2102,7 @@ static int start_chre_model(struct knowles_sound_trigger_device *stdev,
         ALOGE("%s: ERROR: Waited for %ds but we didn't get the event from "
               "Host 1, and fw reset is not yet complete", __func__,
               CHRE_CREATE_WAIT_TIME_IN_S * CHRE_CREATE_WAIT_MAX_COUNT);
-        err = -EAGAIN;
+        err = -ENODEV;
         goto exit;
     }
 
@@ -2444,6 +2471,7 @@ static void *callback_thread_loop(void *context)
                      * was genuine firmware crash and we don't need to reinit
                      * the audio route library.
                      */
+                    ALOGD("Firmware has redownloaded, start the recovery");
                     if (stdev->fw_reset_done_by_hal == true) {
                         stdev->route_hdl = audio_route_init(stdev->snd_crd_num,
                                                             stdev->mixer_path_xml);
@@ -2455,11 +2483,11 @@ static void *callback_thread_loop(void *context)
                         stdev->fw_reset_done_by_hal = false;
                     }
 
-                    ALOGD("Firmware has redownloaded, start the recovery");
                     int err = crash_recovery(stdev);
                     if (err != 0) {
                         ALOGE("Crash recovery failed");
                     }
+                    pthread_cond_signal(&stdev->firmware_ready_cond);
                 } else if (strstr(msg + i, IAXXX_FW_DWNLD_SUCCESS_STR)) {
                     ALOGD("Firmware downloaded successfully");
                     stdev->is_st_hal_ready = true;
@@ -2643,12 +2671,6 @@ static int stop_recognition(struct knowles_sound_trigger_device *stdev,
     int status = 0;
     struct model_info *model = &stdev->models[handle];
 
-    if (stdev->is_st_hal_ready == false) {
-        ALOGE("%s: ST HAL is not ready yet", __func__);
-        status = -EAGAIN;
-        goto exit;
-    }
-
     if (model->config != NULL) {
         dereg_hal_event_session(model->config, handle);
         free(model->config);
@@ -2728,11 +2750,9 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
     ALOGD("+%s+", __func__);
     pthread_mutex_lock(&stdev->lock);
 
-    if (stdev->is_st_hal_ready == false) {
-        ALOGE("%s: ST HAL is not ready yet", __func__);
-        ret = -EAGAIN;
+    ret = check_firmware_ready(stdev);
+    if (ret != 0)
         goto exit;
-    }
 
     if (handle == NULL || sound_model == NULL) {
         ALOGE("%s: handle/sound_model is NULL", __func__);
@@ -2868,11 +2888,9 @@ static int stdev_unload_sound_model(const struct sound_trigger_hw_device *dev,
     ALOGD("+%s handle %d+", __func__, handle);
     pthread_mutex_lock(&stdev->lock);
 
-    if (stdev->is_st_hal_ready == false) {
-        ALOGE("%s: ST HAL is not ready yet", __func__);
-        ret = -EAGAIN;
+    ret = check_firmware_ready(stdev);
+    if (ret != 0)
         goto exit;
-    }
 
     // Just confirm the model was previously loaded
     if (stdev->models[handle].is_loaded == false) {
@@ -3013,14 +3031,11 @@ static int stdev_start_recognition(
     struct model_info *model = &stdev->models[handle];
 
     ALOGD("%s stdev %p, sound model %d", __func__, stdev, handle);
-
     pthread_mutex_lock(&stdev->lock);
 
-    if (stdev->is_st_hal_ready == false) {
-        ALOGE("%s: ST HAL is not ready yet", __func__);
-        status = -EAGAIN;
+    status = check_firmware_ready(stdev);
+    if (status != 0)
         goto exit;
-    }
 
     if (callback == NULL) {
         ALOGE("%s: recognition_callback is null", __func__);
@@ -3153,8 +3168,12 @@ static int stdev_stop_recognition(
     struct knowles_sound_trigger_device *stdev =
         (struct knowles_sound_trigger_device *)dev;
     int status = 0;
-    pthread_mutex_lock(&stdev->lock);
     ALOGD("+%s sound model %d+", __func__, handle);
+    pthread_mutex_lock(&stdev->lock);
+
+    status = check_firmware_ready(stdev);
+    if (status != 0)
+        goto exit;
 
     status = stop_recognition(stdev, handle);
 
@@ -3190,14 +3209,12 @@ static int stdev_get_model_state(const struct sound_trigger_hw_device *dev,
     ALOGD("+%s+", __func__);
     pthread_mutex_lock(&stdev->lock);
 
+    ret = check_firmware_ready(stdev);
+    if (ret != 0)
+        goto exit;
+
     if (!stdev->opened) {
         ALOGE("%s: stdev isn't initialized", __func__);
-        ret = -ENODEV;
-        goto exit;
-    }
-
-    if (stdev->is_st_hal_ready == false) {
-        ALOGE("%s: ST HAL is not ready yet", __func__);
         ret = -ENODEV;
         goto exit;
     }
@@ -3287,15 +3304,13 @@ static int stdev_close(hw_device_t *device)
     ALOGD("+%s+", __func__);
     pthread_mutex_lock(&stdev->lock);
 
+    ret = check_firmware_ready(stdev);
+    if (ret != 0)
+        goto exit;
+
     if (!stdev->opened) {
         ALOGE("%s: device already closed", __func__);
         ret = -EFAULT;
-        goto exit;
-    }
-
-    if (stdev->is_st_hal_ready == false) {
-        ALOGE("%s: ST HAL is not ready yet", __func__);
-        ret = -EAGAIN;
         goto exit;
     }
 
