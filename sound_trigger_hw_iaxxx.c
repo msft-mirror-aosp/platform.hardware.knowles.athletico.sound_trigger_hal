@@ -111,7 +111,7 @@ static const struct sound_trigger_properties hw_properties = {
     POWER_CONSUMPTION           // power_consumption_mw
 };
 
-const char codec_arch[SOUND_TRIGGER_MAX_STRING_LEN] = "hemidelta_athletico";
+const char codec_arch[SOUND_TRIGGER_MAX_STRING_LEN] = "9b55e25e-8ea3-4f73-bce9-b37860d57f5a";
 
 static struct sound_trigger_properties_extended_1_3 hw_properties_1_3;
 
