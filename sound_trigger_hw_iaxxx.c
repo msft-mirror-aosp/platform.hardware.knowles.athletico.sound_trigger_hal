@@ -636,18 +636,11 @@ static int check_and_setup_src_package(
 
     if (stdev->is_src_package_loaded == false) {
         err = setup_src_package(stdev->odsp_hdl);
-        if (err != 0) {
-            ALOGE("%s: Failed to load SRC package", __func__);
-            goto exit;
-        } else {
-            ALOGD("%s: SRC package loaded", __func__);
-            stdev->is_src_package_loaded = true;
-        }
+        stdev->is_src_package_loaded = true;
     } else {
         ALOGD("%s: SRC package is already loaded", __func__);
     }
 
-exit:
     return err;
 }
 
@@ -658,16 +651,11 @@ static int check_and_destroy_src_package(
 
     if (!is_any_model_active(stdev) && stdev->is_src_package_loaded == true) {
         err = destroy_src_package(stdev->odsp_hdl);
-        if (err != 0) {
-            ALOGE("%s: Failed to destroy SRC package", __func__);
-            goto exit;
-        } else {
-            ALOGD("%s: SRC package destroy", __func__);
-            stdev->is_src_package_loaded = false;
-        }
+        stdev->is_src_package_loaded = false;
+    } else {
+        ALOGD("%s: Can't destroy package due to active status", __func__);
     }
 
-exit:
     return err;
 }
 
@@ -678,18 +666,11 @@ static int check_and_setup_buffer_package(
 
     if (stdev->is_buffer_package_loaded == false) {
         err = setup_buffer_package(stdev->odsp_hdl);
-        if (err != 0) {
-            ALOGE("%s: Failed to load Buffer package", __func__);
-            goto exit;
-        } else {
-            ALOGD("%s: Buffer package loaded", __func__);
-            stdev->is_buffer_package_loaded = true;
-        }
+        stdev->is_buffer_package_loaded = true;
     } else {
         ALOGD("%s: Buffer package is already loaded", __func__);
     }
 
-exit:
     return err;
 }
 
@@ -706,16 +687,11 @@ static int check_and_destroy_buffer_package(
         !stdev->is_chre_loaded)) {
 
         err = destroy_buffer_package(stdev->odsp_hdl);
-        if (err != 0) {
-            ALOGE("%s: Failed to destroy Buffer package", __func__);
-            goto exit;
-        } else {
-            ALOGD("%s: Buffer package destroy", __func__);
-            stdev->is_buffer_package_loaded = false;
-        }
+        stdev->is_buffer_package_loaded = false;
+    } else {
+        ALOGD("%s: Can't destroy package due to active status", __func__);
     }
 
-exit:
     return err;
 }
 
@@ -729,7 +705,6 @@ static int setup_package(struct knowles_sound_trigger_device *stdev,
             err = setup_chre_package(stdev->odsp_hdl);
             if (err != 0) {
                 ALOGE("Failed to load CHRE package");
-                goto exit;
             }
         }
         stdev->current_enable = stdev->current_enable | CHRE_MASK;
@@ -738,14 +713,12 @@ static int setup_package(struct knowles_sound_trigger_device *stdev,
             err = setup_hotword_package(stdev->odsp_hdl);
             if (err != 0) {
                 ALOGE("Failed to load Hotword package");
-                goto exit;
             }
         }
         err = write_model(stdev->odsp_hdl, model->data, model->data_sz,
                         model->kw_id);
         if (err != 0) {
             ALOGE("Failed to write Hotword model");
-            goto exit;
         }
 
         //setup model state.
@@ -753,21 +726,18 @@ static int setup_package(struct knowles_sound_trigger_device *stdev,
         err = set_hotword_state(stdev->odsp_hdl, stdev->current_enable);
         if (err != 0) {
             ALOGE("Failed to set Hotword state");
-            goto exit;
         }
     } else if (check_uuid_equality(model->uuid, stdev->wakeup_model_uuid)) {
         if (!(stdev->current_enable & PLUGIN1_MASK)) {
             err = setup_hotword_package(stdev->odsp_hdl);
             if (err != 0) {
                 ALOGE("Failed to load Hotword package");
-                goto exit;
             }
         }
         err = write_model(stdev->odsp_hdl, model->data, model->data_sz,
                         model->kw_id);
         if (err != 0) {
             ALOGE("Failed to write Wakeup model");
-            goto exit;
         }
 
         //setup model state.
@@ -775,14 +745,12 @@ static int setup_package(struct knowles_sound_trigger_device *stdev,
         err = set_hotword_state(stdev->odsp_hdl, stdev->current_enable);
         if (err != 0) {
             ALOGE("Failed to set Wakeup state");
-            goto exit;
         }
     } else if (check_uuid_equality(model->uuid, stdev->ambient_model_uuid)) {
         if (!(stdev->current_enable & PLUGIN2_MASK)) {
             err = setup_ambient_package(stdev->odsp_hdl);
             if (err != 0) {
                 ALOGE("Failed to load Ambient package");
-                goto exit;
             }
         } else {
             // tear down plugin2 for writing new model data.
@@ -793,7 +761,6 @@ static int setup_package(struct knowles_sound_trigger_device *stdev,
                         model->data_sz, model->kw_id);
         if (err != 0) {
             ALOGE("Failed to write Ambient model");
-            goto exit;
         }
 
         //setup model state.
@@ -801,7 +768,6 @@ static int setup_package(struct knowles_sound_trigger_device *stdev,
         err = set_ambient_state(stdev->odsp_hdl, stdev->current_enable);
         if (err != 0) {
             ALOGE("Failed to set Ambient state");
-            goto exit;
         }
 
     } else if (check_uuid_equality(model->uuid, stdev->entity_model_uuid)) {
@@ -809,7 +775,6 @@ static int setup_package(struct knowles_sound_trigger_device *stdev,
             err = setup_ambient_package(stdev->odsp_hdl);
             if (err != 0) {
                 ALOGE("Failed to load Ambient package");
-                goto exit;
             }
         } else {
             // tear down plugin2 for writing new model data.
@@ -820,7 +785,6 @@ static int setup_package(struct knowles_sound_trigger_device *stdev,
                         model->data_sz, model->kw_id);
         if (err != 0) {
             ALOGE("Failed to write Entity model");
-            goto exit;
         }
 
         //setup model state.
@@ -828,11 +792,9 @@ static int setup_package(struct knowles_sound_trigger_device *stdev,
         err = set_ambient_state(stdev->odsp_hdl, stdev->current_enable);
         if (err != 0) {
             ALOGE("Failed to set Entity state");
-            goto exit;
         }
     }
 
-exit:
     return err;
 }
 
@@ -846,27 +808,29 @@ static int setup_buffer(struct knowles_sound_trigger_device *stdev,
             || (check_uuid_equality(model->uuid, stdev->wakeup_model_uuid))) {
 
             stdev->hotword_buffer_enable++;
-            if (stdev->hotword_buffer_enable > 1)
+            if (stdev->hotword_buffer_enable > 1) {
+                ALOGD("%d models are using hotword buffer",
+                      stdev->hotword_buffer_enable);
                 goto exit;
-
+            }
             err = setup_howord_buffer(stdev->odsp_hdl);
             if (err != 0) {
                 stdev->hotword_buffer_enable--;
                 ALOGE("Failed to create the buffer plugin");
-                goto exit;
             }
         } else if ((check_uuid_equality(model->uuid, stdev->ambient_model_uuid))
             || (check_uuid_equality(model->uuid, stdev->entity_model_uuid))) {
 
             stdev->music_buffer_enable++;
-            if (stdev->music_buffer_enable > 1)
+            if (stdev->music_buffer_enable > 1) {
+                ALOGD("%d models are using music buffer",
+                      stdev->music_buffer_enable);
                 goto exit;
-
+            }
             err = setup_music_buffer(stdev->odsp_hdl);
             if (err != 0) {
                 stdev->music_buffer_enable--;
                 ALOGE("Failed to load music buffer package");
-                goto exit;
             }
         }
     } else {
@@ -877,14 +841,15 @@ static int setup_buffer(struct knowles_sound_trigger_device *stdev,
                 goto exit;
             }
             stdev->hotword_buffer_enable--;
-            if (stdev->hotword_buffer_enable != 0)
+            if (stdev->hotword_buffer_enable != 0) {
+                ALOGD("hotword buffer is still used by %d models",
+                      stdev->hotword_buffer_enable);
                 goto exit;
-
+            }
             err = destroy_howord_buffer(stdev->odsp_hdl);
 
             if (err != 0) {
                 ALOGE("Failed to unload hotword buffer package");
-                goto exit;
             }
 
         } else if ((check_uuid_equality(model->uuid, stdev->ambient_model_uuid))
@@ -894,13 +859,14 @@ static int setup_buffer(struct knowles_sound_trigger_device *stdev,
                 goto exit;
             }
             stdev->music_buffer_enable--;
-            if (stdev->music_buffer_enable != 0)
+            if (stdev->music_buffer_enable != 0) {
+                ALOGD("music buffer is still used by %d models",
+                      stdev->music_buffer_enable);
                 goto exit;
-
+            }
             err = destroy_music_buffer(stdev->odsp_hdl);
             if (err != 0) {
                 ALOGE("Failed to unload music buffer package");
-                goto exit;
             }
        }
     }
@@ -920,20 +886,17 @@ static int destroy_package(struct knowles_sound_trigger_device *stdev,
             err = destroy_chre_package(stdev->odsp_hdl);
             if (err != 0) {
                 ALOGE("Failed to destroy CHRE package");
-                goto exit;
             }
         }
     } else if (check_uuid_equality(model->uuid, stdev->hotword_model_uuid)) {
         err = tear_hotword_state(stdev->odsp_hdl, HOTWORD_MASK);
         if (err != 0) {
             ALOGE("Failed to tear Hotword state");
-            goto exit;
         }
 
         err = flush_model(stdev->odsp_hdl, model->kw_id);
         if (err != 0) {
             ALOGE("Failed to flush Hotword model");
-            goto exit;
         }
         stdev->current_enable = stdev->current_enable & ~HOTWORD_MASK;
 
@@ -941,7 +904,6 @@ static int destroy_package(struct knowles_sound_trigger_device *stdev,
             err = destroy_hotword_package(stdev->odsp_hdl);
             if (err != 0) {
                 ALOGE("Failed to destroy Hotword package");
-                goto exit;
             }
         }
 
@@ -949,13 +911,11 @@ static int destroy_package(struct knowles_sound_trigger_device *stdev,
         err = tear_hotword_state(stdev->odsp_hdl, WAKEUP_MASK);
         if (err != 0) {
             ALOGE("Failed to tear Wakeup state");
-            goto exit;
         }
 
         err = flush_model(stdev->odsp_hdl, model->kw_id);
         if (err != 0) {
             ALOGE("Failed to flush Wakeup model");
-            goto exit;
         }
         stdev->current_enable = stdev->current_enable & ~WAKEUP_MASK;
 
@@ -963,7 +923,6 @@ static int destroy_package(struct knowles_sound_trigger_device *stdev,
             err = destroy_hotword_package(stdev->odsp_hdl);
             if (err != 0) {
                 ALOGE("Failed to destroy Hotword package");
-                goto exit;
             }
         }
 
@@ -971,13 +930,11 @@ static int destroy_package(struct knowles_sound_trigger_device *stdev,
         err = tear_ambient_state(stdev->odsp_hdl, AMBIENT_MASK);
         if (err != 0) {
             ALOGE("Failed to tear Ambient state");
-            goto exit;
         }
 
         err = flush_model(stdev->odsp_hdl, model->kw_id);
         if (err != 0) {
             ALOGE("Failed to flush Ambient model");
-            goto exit;
         }
         stdev->current_enable = stdev->current_enable & ~AMBIENT_MASK;
 
@@ -985,20 +942,17 @@ static int destroy_package(struct knowles_sound_trigger_device *stdev,
             err = destroy_ambient_package(stdev->odsp_hdl);
             if (err != 0) {
                 ALOGE("Failed to destroy Ambient package");
-                goto exit;
             }
         }
     } else if (check_uuid_equality(model->uuid, stdev->entity_model_uuid)) {
         err = tear_ambient_state(stdev->odsp_hdl, ENTITY_MASK);
         if (err != 0) {
             ALOGE("Failed to tear Entity state");
-            goto exit;
         }
 
         err = flush_model(stdev->odsp_hdl, model->kw_id);
         if (err != 0) {
             ALOGE("Failed to flush Entity model");
-            goto exit;
         }
         stdev->current_enable = stdev->current_enable & ~ENTITY_MASK;
 
@@ -1006,11 +960,9 @@ static int destroy_package(struct knowles_sound_trigger_device *stdev,
             err = destroy_ambient_package(stdev->odsp_hdl);
             if (err != 0) {
                 ALOGE("Failed to destroy Ambient package");
-                goto exit;
             }
         }
     }
-exit:
     return err;
 }
 
@@ -1090,49 +1042,41 @@ static int async_setup_aec(struct knowles_sound_trigger_device *stdev)
                                 INTERNAL_OSCILLATOR);
             if (ret != 0) {
                 ALOGE("Failed to disable mic route with INT OSC");
-                goto exit;
             }
         }
         ret = setup_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
         if (ret != 0) {
             ALOGE("Failed to load SRC-amp package");
-            goto exit;
         }
         ret = enable_src_route(stdev->route_hdl, true, SRC_AMP_REF);
         if (ret != 0) {
             ALOGE("Failed to enable SRC-amp route");
-            goto exit;
         }
 
         ret = setup_aec_package(stdev->odsp_hdl);
         if (ret != 0) {
             ALOGE("Failed to load AEC package");
-            goto exit;
         }
         ret = enable_bargein_route(stdev->route_hdl, true);
         if (ret != 0) {
             ALOGE("Failed to enable buffer route");
-            goto exit;
         }
 
         if (is_mic_controlled_by_ahal(stdev) == false) {
             ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_16K);
             if (ret != 0) {
                 ALOGE("Failed to enable amp-ref route");
-                goto exit;
             }
             ret = enable_mic_route(stdev->route_hdl, true,
                                 EXTERNAL_OSCILLATOR);
             if (ret != 0) {
                 ALOGE("Failed to enable mic route with EXT OSC");
-                goto exit;
             }
         } else {
             // main mic is turned by media recording
             ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_48K);
             if (ret != 0) {
                 ALOGE("Failed to enable amp-ref route");
-                goto exit;
             }
         }
         stdev->is_bargein_route_enabled = true;
@@ -1142,13 +1086,11 @@ static int async_setup_aec(struct knowles_sound_trigger_device *stdev)
                                 !stdev->is_bargein_route_enabled);
             if (ret != 0) {
                 ALOGE("Failed to tear old buffer route");
-                goto exit;
             }
             ret = set_hotword_buffer_route(stdev->route_hdl,
                                 stdev->is_bargein_route_enabled);
             if (ret != 0) {
                 ALOGE("Failed to enable buffer route");
-                goto exit;
             }
         }
 
@@ -1157,13 +1099,11 @@ static int async_setup_aec(struct knowles_sound_trigger_device *stdev)
                                 !stdev->is_bargein_route_enabled);
             if (ret != 0) {
                 ALOGE("Failed to tear old music buffer route");
-                goto exit;
             }
             ret = set_music_buffer_route(stdev->route_hdl,
                                 stdev->is_bargein_route_enabled);
             if (ret != 0) {
                 ALOGE("Failed to enable buffer route");
-                goto exit;
             }
         }
 
@@ -1176,7 +1116,6 @@ static int async_setup_aec(struct knowles_sound_trigger_device *stdev)
                                         !stdev->is_bargein_route_enabled);
                 if (ret != 0) {
                     ALOGE("Failed to tear old package route");
-                    goto exit;
                 }
                 // resetup the package route with bargein
                 ret = set_package_route(stdev,
@@ -1184,7 +1123,6 @@ static int async_setup_aec(struct knowles_sound_trigger_device *stdev)
                                         stdev->is_bargein_route_enabled);
                 if (ret != 0) {
                     ALOGE("Failed to enable package route");
-                    goto exit;
                 }
             }
         }
@@ -1192,7 +1130,6 @@ static int async_setup_aec(struct knowles_sound_trigger_device *stdev)
         ALOGD("%s: Bargein is already enabled", __func__);
     }
 
-exit:
     return ret;
 }
 
@@ -1211,58 +1148,50 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
         strmt = STRM_48K;
     }
 
-    /*
-     *[TODO] Add correct error return value for input source route
-     * b/119390722 for tracing.
-     */
     if (enable) {
+        /*
+         * Setup the sources include microphone, SampleRate Converter
+         * and Barge-in if necessary.
+         * The SRC-mic and SRC-amp must be enabled before barge-in route.
+         * That avoid the frame alignment conflict of AEC module.
+         */
         if (stdev->is_mic_route_enabled == false) {
             err = check_and_setup_src_package(stdev);
             if (err != 0) {
-                ALOGE("Fail to setup src Package");
-                goto exit;
+                ALOGE("Failed to load SRC package");
             }
             err = setup_src_plugin(stdev->odsp_hdl, SRC_MIC);
             if (err != 0) {
-                ALOGE("Failed to load SRC package");
-                goto exit;
+                ALOGE("Failed to create SRC-mic plugin");
             }
             err = enable_src_route(stdev->route_hdl, true, SRC_MIC);
             if (err != 0) {
                 ALOGE("Failed to enable SRC-mic route");
-                goto exit;
             }
         }
         if (stdev->rx_active_count > 0 &&
             stdev->is_bargein_route_enabled == false) {
             err = setup_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
             if (err != 0) {
-                ALOGE("Failed to load SRC-amp package");
-                goto exit;
+                ALOGE("Failed to create SRC-amp plugin");
             }
             err = enable_src_route(stdev->route_hdl, true, SRC_AMP_REF);
             if (err != 0) {
                 ALOGE("Failed to enable SRC-amp route");
-                goto exit;
             }
 
             err = setup_aec_package(stdev->odsp_hdl);
             if (err != 0) {
                 ALOGE("Failed to load AEC package");
-                // We didn't load AEC package so don't setup the routes
-                goto exit;
             }
 
-            // Enable the bargein route if not enabled
             err = enable_bargein_route(stdev->route_hdl, true);
             if (err != 0) {
-                ALOGE("Failed to enable buffer route");
-                goto exit;
+                ALOGE("Failed to enable barge-in route");
             }
             err = enable_amp_ref_route(stdev->route_hdl, true, strmt);
             if (err != 0) {
-                ALOGE("Failed to amp-ref route");
-                goto exit;
+                ALOGE("Failed to enable amp-ref route");
             }
             stdev->is_bargein_route_enabled = true;
         }
@@ -1271,75 +1200,61 @@ static int handle_input_source(struct knowles_sound_trigger_device *stdev,
                 err = enable_mic_route(stdev->route_hdl, true, ct);
                 if (err != 0) {
                     ALOGE("Failed to enable mic route");
-                    goto exit;
                 }
             }
             stdev->is_mic_route_enabled = true;
         }
     } else {
         if (!is_any_model_active(stdev)) {
-            ALOGD("None of keywords are active");
+            ALOGD("None of model are active");
             if (stdev->rx_active_count > 0 &&
                 stdev->is_bargein_route_enabled == true) {
-                // Just disable the route and update the route status but retain
-                // bargein status
                 err = enable_bargein_route(stdev->route_hdl, false);
                 if (err != 0) {
-                    ALOGE("Failed to disable bargein route");
-                    goto exit;
+                    ALOGE("Failed to disable barge-in route");
                 }
                 err = destroy_aec_package(stdev->odsp_hdl);
                 if (err != 0) {
-                    ALOGE("Failed to unload AEC package");
-                    goto exit;
+                    ALOGE("Failed to destroy AEC package");
                 }
                 err = enable_src_route(stdev->route_hdl, false, SRC_AMP_REF);
                 if (err != 0) {
                     ALOGE("Failed to disable SRC-amp route");
-                    goto exit;
                 }
                 err = destroy_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
                 if (err != 0) {
-                    ALOGE("Failed to unload SRC-amp package");
-                    goto exit;
+                    ALOGE("Failed to destroy SRC-amp package");
                 }
                 err = enable_amp_ref_route(stdev->route_hdl, false, strmt);
                 if (err != 0) {
                     ALOGE("Failed to amp-ref route");
-                    goto exit;
                 }
                 stdev->is_bargein_route_enabled = false;
            }
            if (stdev->is_mic_route_enabled == true) {
-               // Close SRC package
                err = enable_src_route(stdev->route_hdl, false, SRC_MIC);
                if (err != 0) {
                    ALOGE("Failed to disable SRC-mic route");
-                   goto exit;
                }
                err = destroy_src_plugin(stdev->odsp_hdl, SRC_MIC);
                if (err != 0) {
-                   ALOGE("Failed to unload SRC-mic package");
-                   goto exit;
+                   ALOGE("Failed to destroy SRC-mic package");
                }
                if (is_mic_controlled_by_ahal(stdev) == false) {
                    err = enable_mic_route(stdev->route_hdl, false, ct);
                    if (err != 0) {
                        ALOGE("Failed to disable mic route");
-                       goto exit;
                    }
                }
                stdev->is_mic_route_enabled = false;
                err = check_and_destroy_src_package(stdev);
                if (err != 0) {
-                   ALOGE("Fail to destroy src Package");
-                   goto exit;
+                   ALOGE("Failed to destroy src package");
                }
            }
        }
     }
 
-exit:
     return err;
 }
 
@@ -1560,26 +1475,22 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
                     ret = enable_amp_ref_route(stdev->route_hdl, false, STRM_16K);
                     if (ret != 0) {
                         ALOGE("Failed to disable amp-ref route");
-                        goto exit;
                     }
                     ret = enable_mic_route(stdev->route_hdl, false,
                                            EXTERNAL_OSCILLATOR);
                     if (ret != 0) {
                         ALOGE("Failed to disable mic route with EXT OSC");
-                        goto exit;
                     }
 
                     ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_48K);
                     if (ret != 0) {
                         ALOGE("Failed to enable amp-ref route");
-                        goto exit;
                     }
                 } else {
                     ret = enable_mic_route(stdev->route_hdl, false,
                                            INTERNAL_OSCILLATOR);
                     if (ret != 0) {
                         ALOGE("Failed to disable mic route with INT OSC");
-                        goto exit;
                     }
                 }
             } else {
@@ -1633,26 +1544,22 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
                     ret = enable_amp_ref_route(stdev->route_hdl, false, STRM_48K);
                     if (ret != 0) {
                         ALOGE("Failed to disable amp-ref route");
-                        goto exit;
                     }
                     ret = enable_mic_route(stdev->route_hdl, true,
                                            EXTERNAL_OSCILLATOR);
                     if (ret != 0) {
                         ALOGE("Failed to enable mic route with EXT OSC");
-                        goto exit;
                     }
                     // turn on amp-ref with 16khz
                     ret = enable_amp_ref_route(stdev->route_hdl, true, STRM_16K);
                     if (ret != 0) {
                         ALOGE("Failed to enable amp-ref route");
-                        goto exit;
                     }
                 } else {
                     ret = enable_mic_route(stdev->route_hdl, true,
                                            INTERNAL_OSCILLATOR);
                     if (ret != 0) {
                         ALOGE("Failed to enable mic route with INT OSC");
-                        goto exit;
                     }
                 }
             } else {
@@ -1662,7 +1569,6 @@ static bool do_handle_functions(struct knowles_sound_trigger_device *stdev,
         }
     }
 
-exit:
     ALOGD("-%s-: pre %d, cur %d, event %d", __func__, pre_mode, cur_mode, event);
     return ret;
 }
@@ -2841,13 +2747,13 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
         }
         stdev->models[i].kw_id = USELESS_KW_ID;
     } else {
-        ALOGE("%s: ERROR: unknown keyword model file", __func__);
+        ALOGE("%s: ERROR: unknown model uuid", __func__);
         ret = -EINVAL;
         goto error;
     }
 
     *handle = i;
-    ALOGV("%s: Loading keyword model handle(%d) type(%d)", __func__,
+    ALOGV("%s: Loading model handle(%d) type(%d)", __func__,
         *handle, sound_model->type);
     // This will need to be replaced with UUID once they are fixed
     stdev->models[i].model_handle = *handle;
@@ -3090,7 +2996,6 @@ static int stdev_start_recognition(
     status = check_and_setup_buffer_package(stdev);
     if (status != 0) {
         ALOGE("%s: ERROR: Failed to load the buffer package", __func__);
-        goto exit;
     }
 
     model->is_active = true;
@@ -3780,7 +3685,6 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                                                     !stdev->is_bargein_route_enabled);
                             if (ret != 0) {
                                 ALOGE("Failed to tear old package route");
-                                goto exit;
                             }
                             // resetup the package route with out bargein
                             ret = set_package_route(stdev,
@@ -3788,7 +3692,6 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                                                     stdev->is_bargein_route_enabled);
                             if (ret != 0) {
                                 ALOGE("Failed to enable package route");
-                                goto exit;
                             }
                         }
                     }
@@ -3799,13 +3702,11 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                                             !stdev->is_bargein_route_enabled);
                         if (ret != 0) {
                             ALOGE("Failed to tear old buffer route");
-                            goto exit;
                         }
                         ret = set_hotword_buffer_route(stdev->route_hdl,
                                             stdev->is_bargein_route_enabled);
                         if (ret != 0) {
                             ALOGE("Failed to enable buffer route");
-                            goto exit;
                         }
                     }
 
@@ -3814,64 +3715,54 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
                                             !stdev->is_bargein_route_enabled);
                         if (ret != 0) {
                             ALOGE("Failed to tear old music buffer route");
-                            goto exit;
                         }
                         ret = set_music_buffer_route(stdev->route_hdl,
                                             stdev->is_bargein_route_enabled);
                         if (ret != 0) {
                             ALOGE("Failed to enable buffer route");
-                            goto exit;
                         }
                     }
 
                     ret = enable_bargein_route(stdev->route_hdl, false);
                     if (ret != 0) {
                         ALOGE("Failed to enable buffer route");
-                        goto exit;
                     }
 
                     ret = destroy_aec_package(stdev->odsp_hdl);
                     if (ret != 0) {
-                        ALOGE("Failed to unload AEC package");
-                        goto exit;
+                        ALOGE("Failed to destroy AEC package");
                     }
 
                     ret = enable_src_route(stdev->route_hdl, false, SRC_AMP_REF);
                     if (ret != 0) {
                         ALOGE("Failed to disable SRC-amp route");
-                        goto exit;
                     }
 
                     ret = destroy_src_plugin(stdev->odsp_hdl, SRC_AMP_REF);
                     if (ret != 0) {
-                        ALOGE("Failed to unload SRC-amp package");
-                        goto exit;
+                        ALOGE("Failed to destroy SRC-amp package");
                     }
 
                     if (is_mic_controlled_by_ahal(stdev) == false) {
                         ret = enable_amp_ref_route(stdev->route_hdl, false, STRM_16K);
                         if (ret != 0) {
                             ALOGE("Failed to disable amp-ref route");
-                            goto exit;
                         }
                         ret = enable_mic_route(stdev->route_hdl, false,
                                             EXTERNAL_OSCILLATOR);
                         if (ret != 0) {
                             ALOGE("Failed to disable mic route with INT OSC");
-                            goto exit;
                         }
                         ret = enable_mic_route(stdev->route_hdl, true,
                                             INTERNAL_OSCILLATOR);
                         if (ret != 0) {
                             ALOGE("Failed to enable mic route with EXT OSC");
-                            goto exit;
                         }
                     } else {
                         // main mic is turned by media record, close it by 48khz
                         ret = enable_amp_ref_route(stdev->route_hdl, false, STRM_48K);
                         if (ret != 0) {
                             ALOGE("Failed to disable amp-ref route");
-                            goto exit;
                         }
                     }
                 } else {
