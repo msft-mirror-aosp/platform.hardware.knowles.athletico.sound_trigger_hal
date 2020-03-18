@@ -1880,10 +1880,7 @@ int reset_all_route(struct audio_route *route_hdl)
 
     ALOGD("+%s+", __func__);
     for (int i = ST_ROUTE_MIN; i < ST_ROUTE_MAX; i++) {
-    /*[TODO] Need to use force_reset to clean the active count
-     *       inside libaudioroute
-     */
-        audio_route_reset_and_update_path(route_hdl, route_table[i]);
+        audio_route_force_reset_and_update_path(route_hdl, route_table[i]);
     }
     ALOGD("-%s-", __func__);
     return err;
