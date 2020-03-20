@@ -32,6 +32,32 @@
 
 #include "cvq_ioctl.h"
 
+/* Array for ST route */
+static const char * const route_table[ST_ROUTE_MAX] = {
+
+/* Input Port routing definition */
+    [ST_MIC_ROUTE_INT_CLK] = "mic-route-internal-clock",
+    [ST_MIC_ROUTE_EXT_CLK] = "mic-route-external-clock",
+    [ST_BARGEIN_AMP_REF] = "bargein-amp-ref",
+    [ST_BARGEIN_AMP_REF_48K] = "bargein-amp-ref-48k",
+
+/* Plugin routing definition */
+    [ST_HOTWORD_WITHOUT_BARGEIN] = "hotword-route-without-bargein",
+    [ST_HOTWORD_WITH_BARGEIN] = "hotword-route-with-bargein",
+    [ST_HOTWORD_BUFFER_WITHOUT_BARGEIN] = "buffer-route-without-bargein",
+    [ST_HOTWORD_BUFFER_WITH_BARGEIN] = "buffer-route-with-bargein",
+    [ST_AMBIENT_WITHOUT_BARGEIN] = "ambient-route-without-bargein",
+    [ST_AMBIENT_WITH_BARGEIN] = "ambient-route-with-bargein",
+    [ST_AMBIENT_BUFFER_WITHOUT_BARGEIN] = "downlink-audio-route",
+    [ST_AMBIENT_BUFFER_WITH_BARGEIN] = "music-audio-route",
+    [ST_BARGEIN_ROUTE] = "bargein-route",
+    [ST_CHRE_WITHOUT_BARGEIN] = "chre-route-without-bargein",
+    [ST_CHRE_WITH_BARGEIN] = "chre-route-with-bargein",
+    [ST_SRC_ROUTE_MIC] = "src-route-mic",
+    [ST_SRC_ROUTE_AMP_REF] = "src-route-amp-ref",
+    [ST_SENSOR_ROUTE] = "oslo-route",
+};
+
 int write_model(struct iaxxx_odsp_hw *odsp_hdl, unsigned char *data,
                 int length, int kw_type)
  {
@@ -140,9 +166,9 @@ int set_sensor_route(struct audio_route *route_hdl, bool enable)
 
     ALOGV("+%s+", __func__);
     if (enable)
-        err = audio_route_apply_and_update_path(route_hdl, SENSOR_ROTUE);
+        err = audio_route_apply_and_update_path(route_hdl, route_table[ST_SENSOR_ROUTE]);
     else
-        err = audio_route_reset_and_update_path(route_hdl, SENSOR_ROTUE);
+        err = audio_route_reset_and_update_path(route_hdl, route_table[ST_SENSOR_ROUTE]);
     if (err)
         ALOGE("%s: route fail %d", __func__, err);
 
@@ -249,10 +275,10 @@ int set_ambient_route(struct audio_route *route_hdl, bool bargein)
 
     if (bargein == true)
         err = audio_route_apply_and_update_path(route_hdl,
-                                        AMBIENT_WITH_BARGEIN_ROUTE);
+                                        route_table[ST_AMBIENT_WITH_BARGEIN]);
     else
         err = audio_route_apply_and_update_path(route_hdl,
-                                        AMBIENT_WITHOUT_BARGEIN_ROUTE);
+                                        route_table[ST_AMBIENT_WITHOUT_BARGEIN]);
     if (err)
         ALOGE("%s: route apply fail %d", __func__, err);
 
@@ -268,10 +294,10 @@ int tear_ambient_route(struct audio_route *route_hdl, bool bargein)
     /* check cvq node to send ioctl */
     if (bargein == true)
         err = audio_route_reset_and_update_path(route_hdl,
-                                        AMBIENT_WITH_BARGEIN_ROUTE);
+                                        route_table[ST_AMBIENT_WITH_BARGEIN]);
     else
         err = audio_route_reset_and_update_path(route_hdl,
-                                        AMBIENT_WITHOUT_BARGEIN_ROUTE);
+                                        route_table[ST_AMBIENT_WITHOUT_BARGEIN]);
     if (err)
         ALOGE("%s: route reset fail %d", __func__, err);
 
@@ -382,10 +408,10 @@ int set_hotword_route(struct audio_route *route_hdl, bool bargein)
 
     if (bargein == true)
         err = audio_route_apply_and_update_path(route_hdl,
-                                            HOTWORD_WITH_BARGEIN_ROUTE);
+                                            route_table[ST_HOTWORD_WITH_BARGEIN]);
     else
         err = audio_route_apply_and_update_path(route_hdl,
-                                            HOTWORD_WITHOUT_BARGEIN_ROUTE);
+                                            route_table[ST_HOTWORD_WITHOUT_BARGEIN]);
     if (err)
         ALOGE("%s: route apply fail %d", __func__, err);
 
@@ -401,10 +427,10 @@ int tear_hotword_route(struct audio_route *route_hdl, bool bargein)
     /* check cvq node to send ioctl */
     if (bargein == true)
         err = audio_route_reset_and_update_path(route_hdl,
-                                            HOTWORD_WITH_BARGEIN_ROUTE);
+                                            route_table[ST_HOTWORD_WITH_BARGEIN]);
     else
         err = audio_route_reset_and_update_path(route_hdl,
-                                            HOTWORD_WITHOUT_BARGEIN_ROUTE);
+                                            route_table[ST_HOTWORD_WITHOUT_BARGEIN]);
     if (err)
         ALOGE("%s: route reset fail %d", __func__, err);
 
@@ -419,10 +445,10 @@ int set_chre_audio_route(struct audio_route *route_hdl, bool bargein)
     ALOGV("+%s+", __func__);
     if (bargein)
         err = audio_route_apply_and_update_path(route_hdl,
-                                        CHRE_WITH_BARGEIN_ROUTE);
+                                        route_table[ST_CHRE_WITH_BARGEIN]);
     else
         err = audio_route_apply_and_update_path(route_hdl,
-                                        CHRE_WITHOUT_BARGEIN_ROUTE);
+                                        route_table[ST_CHRE_WITHOUT_BARGEIN]);
     if (err)
         ALOGE("%s: route apply fail %d", __func__, err);
 
@@ -437,10 +463,10 @@ int tear_chre_audio_route(struct audio_route *route_hdl, bool bargein)
     ALOGV("+%s+", __func__);
     if (bargein == true)
         err = audio_route_reset_and_update_path(route_hdl,
-                                        CHRE_WITH_BARGEIN_ROUTE);
+                                        route_table[ST_CHRE_WITH_BARGEIN]);
     else
         err = audio_route_reset_and_update_path(route_hdl,
-                                        CHRE_WITHOUT_BARGEIN_ROUTE);
+                                        route_table[ST_CHRE_WITHOUT_BARGEIN]);
     if (err)
         ALOGE("%s: route reset fail %d", __func__, err);
 
@@ -903,7 +929,7 @@ int setup_chre_package(struct iaxxx_odsp_hw *odsp_hdl)
 
     /* Create CHRE plugins */
     cdata.type = CONFIG_FILE;
-    cdata.data.fdata.filename = BUFFER_CONFIG_VAL_2_SEC;
+    cdata.data.fdata.filename = BUFFER_CONFIG_VAL_CHRE;
     err = iaxxx_odsp_plugin_set_creation_config(odsp_hdl,
                                                 CHRE_INSTANCE_ID,
                                                 IAXXX_HMD_BLOCK_ID,
@@ -1492,10 +1518,10 @@ int set_hotword_buffer_route(struct audio_route *route_hdl, bool bargein)
 
     if (bargein == true)
         err = audio_route_apply_and_update_path(route_hdl,
-                                                BUFFER_WITH_BARGEIN_ROUTE);
+                                                route_table[ST_HOTWORD_BUFFER_WITH_BARGEIN]);
     else
         err = audio_route_apply_and_update_path(route_hdl,
-                                                BUFFER_WITHOUT_BARGEIN_ROUTE);
+                                                route_table[ST_HOTWORD_BUFFER_WITHOUT_BARGEIN]);
     if (err)
         ALOGE("%s: route fail %d", __func__, err);
 
@@ -1511,10 +1537,10 @@ int tear_hotword_buffer_route(struct audio_route *route_hdl, bool bargein)
 
     if (bargein == true)
         err = audio_route_reset_and_update_path(route_hdl,
-                                                BUFFER_WITH_BARGEIN_ROUTE);
+                                                route_table[ST_HOTWORD_BUFFER_WITH_BARGEIN]);
     else
         err = audio_route_reset_and_update_path(route_hdl,
-                                                BUFFER_WITHOUT_BARGEIN_ROUTE);
+                                                route_table[ST_HOTWORD_BUFFER_WITHOUT_BARGEIN]);
     if (err)
         ALOGE("%s: route fail %d", __func__, err);
 
@@ -1528,9 +1554,9 @@ int enable_bargein_route(struct audio_route *route_hdl, bool enable)
 
     ALOGV("+%s+ %d", __func__, enable);
     if (enable)
-        err = audio_route_apply_and_update_path(route_hdl, BARGEIN_ROUTE);
+        err = audio_route_apply_and_update_path(route_hdl, route_table[ST_BARGEIN_ROUTE]);
     else
-        err = audio_route_reset_and_update_path(route_hdl, BARGEIN_ROUTE);
+        err = audio_route_reset_and_update_path(route_hdl, route_table[ST_BARGEIN_ROUTE]);
     if (err)
         ALOGE("%s: route fail %d", __func__, err);
 
@@ -1546,14 +1572,14 @@ int enable_amp_ref_route(struct audio_route *route_hdl, bool enable,
     ALOGV("+%s+ %d strm type %d", __func__, enable, strmt);
     if (strmt == STRM_16K) {
         if (enable)
-            err = audio_route_apply_and_update_path(route_hdl, BARGEIN_AMP_REF);
+            err = audio_route_apply_and_update_path(route_hdl, route_table[ST_BARGEIN_AMP_REF]);
         else
-            err = audio_route_reset_and_update_path(route_hdl, BARGEIN_AMP_REF);
+            err = audio_route_reset_and_update_path(route_hdl, route_table[ST_BARGEIN_AMP_REF]);
     } else if (strmt == STRM_48K) {
         if (enable)
-            err = audio_route_apply_and_update_path(route_hdl, BARGEIN_AMP_REF_48K);
+            err = audio_route_apply_and_update_path(route_hdl, route_table[ST_BARGEIN_AMP_REF_48K]);
         else
-            err = audio_route_reset_and_update_path(route_hdl, BARGEIN_AMP_REF_48K);
+            err = audio_route_reset_and_update_path(route_hdl, route_table[ST_BARGEIN_AMP_REF_48K]);
     } else {
         ALOGE("%s: ERROR: Invalid strm type", __func__);
         err = -EINVAL;
@@ -1573,10 +1599,10 @@ int set_music_buffer_route(struct audio_route *route_hdl, bool downlink)
     ALOGD("+%s+ %d", __func__, downlink);
     if (downlink)
         err = audio_route_apply_and_update_path(route_hdl,
-                                                DOWNLINK_AUDIO_ROUTE);
+                                                route_table[ST_AMBIENT_BUFFER_WITHOUT_BARGEIN]);
     else
         err = audio_route_apply_and_update_path(route_hdl,
-                                                MUSIC_AUDIO_ROUTE);
+                                                route_table[ST_AMBIENT_BUFFER_WITH_BARGEIN]);
     if (err)
         ALOGE("%s: route fail %d", __func__, err);
 
@@ -1591,10 +1617,10 @@ int tear_music_buffer_route(struct audio_route *route_hdl, bool downlink)
     ALOGD("+%s+ %d", __func__, downlink);
     if (downlink)
         err = audio_route_reset_and_update_path(route_hdl,
-                                                DOWNLINK_AUDIO_ROUTE);
+                                                route_table[ST_AMBIENT_BUFFER_WITHOUT_BARGEIN]);
     else
         err = audio_route_reset_and_update_path(route_hdl,
-                                                MUSIC_AUDIO_ROUTE);
+                                                route_table[ST_AMBIENT_BUFFER_WITH_BARGEIN]);
     if (err)
         ALOGE("%s: route fail %d", __func__, err);
 
@@ -1610,14 +1636,14 @@ int enable_src_route(struct audio_route *route_hdl, bool enable, enum src_type s
 
     if (st == SRC_MIC) {
         if (enable)
-            err = audio_route_apply_and_update_path(route_hdl, SRC_ROUTE_MIC);
+            err = audio_route_apply_and_update_path(route_hdl, route_table[ST_SRC_ROUTE_MIC]);
         else
-            err = audio_route_reset_and_update_path(route_hdl, SRC_ROUTE_MIC);
+            err = audio_route_reset_and_update_path(route_hdl, route_table[ST_SRC_ROUTE_MIC]);
     } else if (st == SRC_AMP_REF) {
         if (enable)
-            err = audio_route_apply_and_update_path(route_hdl, SRC_ROUTE_AMP_REF);
+            err = audio_route_apply_and_update_path(route_hdl, route_table[ST_SRC_ROUTE_AMP_REF]);
         else
-            err = audio_route_reset_and_update_path(route_hdl, SRC_ROUTE_AMP_REF);
+            err = audio_route_reset_and_update_path(route_hdl, route_table[ST_SRC_ROUTE_AMP_REF]);
 
     } else {
         ALOGE("%s: ERROR: Invalid src type", __func__);
@@ -1641,18 +1667,18 @@ int enable_mic_route(struct audio_route *route_hdl, bool enable,
     if (ct == EXTERNAL_OSCILLATOR) {
         if (enable) {
             err = audio_route_apply_and_update_path(route_hdl,
-                                                    MIC_ROUTE_EXT_CLK);
+                                                    route_table[ST_MIC_ROUTE_EXT_CLK]);
         } else {
             err = audio_route_reset_and_update_path(route_hdl,
-                                                    MIC_ROUTE_EXT_CLK);
+                                                    route_table[ST_MIC_ROUTE_EXT_CLK]);
         }
     } else if (ct == INTERNAL_OSCILLATOR) {
         if (enable) {
             err = audio_route_apply_and_update_path(route_hdl,
-                                                    MIC_ROUTE_INT_CLK);
+                                                    route_table[ST_MIC_ROUTE_INT_CLK]);
         } else {
             err = audio_route_reset_and_update_path(route_hdl,
-                                                    MIC_ROUTE_INT_CLK);
+                                                    route_table[ST_MIC_ROUTE_INT_CLK]);
         }
     } else {
         ALOGE("%s: ERROR: Invalid clock type", __func__);
@@ -1760,6 +1786,21 @@ int reset_fw(struct iaxxx_odsp_hw *odsp_hdl)
     }
 
 exit:
+    ALOGD("-%s-", __func__);
+    return err;
+}
+
+int reset_all_route(struct audio_route *route_hdl)
+{
+    int err = 0;
+
+    ALOGD("+%s+", __func__);
+    for (int i = ST_ROUTE_MIN; i < ST_ROUTE_MAX; i++) {
+    /*[TODO] Need to use force_reset to clean the active count
+     *       inside libaudioroute
+     */
+        audio_route_reset_and_update_path(route_hdl, route_table[i]);
+    }
     ALOGD("-%s-", __func__);
     return err;
 }
