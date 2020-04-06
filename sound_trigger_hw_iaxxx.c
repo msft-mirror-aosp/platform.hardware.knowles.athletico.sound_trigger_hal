@@ -93,27 +93,31 @@
 #define ADNC_STRM_LIBRARY_PATH "/vendor/lib/hw/adnc_strm.primary.default.so"
 #endif
 
-static const struct sound_trigger_properties hw_properties = {
-    "Knowles Electronics",      // implementor
-    "Continous VoiceQ",         // description
-    0,                          // version
-    // Version UUID
-    { 0x80f7dcd5, 0xbb62, 0x4816, 0xa931, {0x9c, 0xaa, 0x52, 0x5d, 0xf5, 0xc7}},
-    MAX_MODELS,                 // max_sound_models
-    MAX_KEY_PHRASES,            // max_key_phrases
-    MAX_USERS,                  // max_users
-    RECOGNITION_MODE_VOICE_TRIGGER | // recognition_mode
-    RECOGNITION_MODE_GENERIC_TRIGGER,
-    true,                       // capture_transition
-    MAX_BUFFER_MS,              // max_capture_ms
-    true,                      // concurrent_capture
-    false,                      // trigger_in_event
-    POWER_CONSUMPTION           // power_consumption_mw
+static struct sound_trigger_properties_extended_1_3 hw_properties = {
+    {
+        SOUND_TRIGGER_DEVICE_API_VERSION_1_3, //ST version
+        sizeof(struct sound_trigger_properties_extended_1_3)
+    },
+    {
+        "Knowles Electronics",      // implementor
+        "Continuous VoiceQ",        // description
+        0,                          // library version
+        // Version UUID
+        { 0x80f7dcd5, 0xbb62, 0x4816, 0xa931, {0x9c, 0xaa, 0x52, 0x5d, 0xf5, 0xc7}},
+        MAX_MODELS,                 // max_sound_models
+        MAX_KEY_PHRASES,            // max_key_phrases
+        MAX_USERS,                  // max_users
+        RECOGNITION_MODE_VOICE_TRIGGER | // recognition_mode
+        RECOGNITION_MODE_GENERIC_TRIGGER,
+        true,                       // capture_transition
+        MAX_BUFFER_MS,              // max_capture_ms
+        true,                       // concurrent_capture
+        false,                      // trigger_in_event
+        POWER_CONSUMPTION           // power_consumption_mw
+    },
+    "9b55e25e-8ea3-4f73-bce9-b37860d57f5a", //supported arch
+    0,                                      // audio capability
 };
-
-const char codec_arch[SOUND_TRIGGER_MAX_STRING_LEN] = "9b55e25e-8ea3-4f73-bce9-b37860d57f5a";
-
-static struct sound_trigger_properties_extended_1_3 hw_properties_1_3;
 
 struct model_info {
     void *recognition_cookie;
@@ -2544,7 +2548,7 @@ static int stdev_get_properties(
     ALOGV("+%s+", __func__);
     if (properties == NULL)
         return -EINVAL;
-    memcpy(properties, &hw_properties, sizeof(struct sound_trigger_properties));
+    memcpy(properties, &hw_properties.base, sizeof(struct sound_trigger_properties));
     ALOGV("-%s-", __func__);
     return 0;
 }
@@ -2555,19 +2559,20 @@ static const struct sound_trigger_properties_header* stdev_get_properties_extend
     struct knowles_sound_trigger_device *stdev =
           (struct knowles_sound_trigger_device *)dev;
     ALOGV("+%s+", __func__);
-
-    if (hw_properties_1_3.header.version >= SOUND_TRIGGER_DEVICE_API_VERSION_1_3) {
-        hw_properties_1_3.base.version = stdev->hotword_version;
+    pthread_mutex_lock(&stdev->lock);
+    if (hw_properties.header.version >= SOUND_TRIGGER_DEVICE_API_VERSION_1_3) {
+        hw_properties.base.version = stdev->hotword_version;
         ALOGW("SoundTrigger hotword Version is %u",
-              hw_properties_1_3.base.version);
+              hw_properties.base.version);
     } else {
-        ALOGE("STHAL Version is %u", hw_properties_1_3.header.version);
+        ALOGE("STHAL Version is %u", hw_properties.header.version);
+        pthread_mutex_unlock(&stdev->lock);
         return NULL;
     }
 
-
+    pthread_mutex_unlock(&stdev->lock);
     ALOGV("-%s-", __func__);
-    return &hw_properties_1_3.header;
+    return &hw_properties.header;
 }
 
 
@@ -3045,24 +3050,25 @@ static int stdev_start_recognition_extended(
 {
     struct sound_trigger_recognition_config_extended_1_3 *config_1_3 =
                  (struct sound_trigger_recognition_config_extended_1_3 *)header;
+    int status = 0;
 
     if (header->version >= SOUND_TRIGGER_DEVICE_API_VERSION_1_3) {
         /* Use old version before we have real usecase */
         ALOGD("%s: Running 2_3", __func__);
-        stdev_start_recognition(dev, sound_model_handle,
-                                &config_1_3->base,
-                                callback,
-                                cookie);
+        status = stdev_start_recognition(dev, sound_model_handle,
+                                        &config_1_3->base,
+                                        callback,
+                                        cookie);
     } else {
         /* Rollback into old start recognition */
         ALOGD("%s: Running 2_1", __func__);
-        stdev_start_recognition(dev, sound_model_handle,
-                                &config_1_3->base,
-                                callback,
-                                cookie);
+        status = stdev_start_recognition(dev, sound_model_handle,
+                                        &config_1_3->base,
+                                        callback,
+                                        cookie);
     }
 
-    return 0;
+    return status;
 }
 
 
@@ -3534,7 +3540,7 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->recover_model_list = 0;
     stdev->rx_active_count = 0;
     stdev->is_ahal_media_recording = false;
-    stdev->is_concurrent_capture = hw_properties.concurrent_capture;
+    stdev->is_concurrent_capture = hw_properties.base.concurrent_capture;
 
     stdev->is_sensor_destroy_in_prog = false;
     stdev->ss_timer_created = false;
@@ -3545,15 +3551,6 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->snd_crd_num = snd_card_num;
     stdev->fw_reset_done_by_hal = false;
     stdev->hotword_version = 0;
-
-    hw_properties_1_3.header.version = SOUND_TRIGGER_DEVICE_API_VERSION_1_3;
-    hw_properties_1_3.header.size =
-                        sizeof(struct sound_trigger_properties_extended_1_3);
-    memcpy(&hw_properties_1_3.base, &hw_properties,
-           sizeof(struct sound_trigger_properties));
-    snprintf(hw_properties_1_3.supported_model_arch,
-             SOUND_TRIGGER_MAX_STRING_LEN, codec_arch);
-    hw_properties_1_3.audio_capabilities = 0;
 
     str_to_uuid(HOTWORD_AUDIO_MODEL, &stdev->hotword_model_uuid);
     str_to_uuid(WAKEUP_MODEL, &stdev->wakeup_model_uuid);
