@@ -2553,6 +2553,34 @@ static int stdev_get_properties(
     return 0;
 }
 
+/*  Insert a decimal numeral for Prefix into the beginning of String.
+    Length specifies the total number of bytes available at str.
+*/
+static int int_prefix_str(char *str, size_t str_len, int prefix, const char *prefix_format)
+{
+    int prefix_len = snprintf(NULL, 0, prefix_format, prefix);
+    size_t str_cur_len = strlen(str);
+
+    if (str_len < prefix_len + str_cur_len + 1)
+    {
+        ALOGE("%s: Error, not enough space in string to insert prefix: %d, %s\n",
+                __func__, prefix, str);
+        return -1;
+    }
+
+    //  Move the string to make room for the prefix.
+    memmove(str + prefix_len, str, str_cur_len + 1);
+
+    /*  Remember the first character, because snprintf will overwrite it with a
+        null character.
+    */
+    char tmp = str[0];
+
+    snprintf(str, prefix_len + 1, prefix_format, prefix);
+    str[prefix_len] = tmp;
+    return 0;
+}
+
 static const struct sound_trigger_properties_header* stdev_get_properties_extended(
                             const struct sound_trigger_hw_device *dev __unused)
 {
@@ -2562,8 +2590,15 @@ static const struct sound_trigger_properties_header* stdev_get_properties_extend
     pthread_mutex_lock(&stdev->lock);
     if (hw_properties.header.version >= SOUND_TRIGGER_DEVICE_API_VERSION_1_3) {
         hw_properties.base.version = stdev->hotword_version;
-        ALOGW("SoundTrigger hotword Version is %u",
-              hw_properties.base.version);
+
+        /* Per GMS requirement new to Android R, the supported_model_arch field
+           must be the Google hotword firmware version comma separated with the
+           supported_model_arch platform identifier.
+        */
+        int_prefix_str(hw_properties.supported_model_arch, SOUND_TRIGGER_MAX_STRING_LEN,
+                hw_properties.base.version, "%u,");
+        ALOGW("SoundTrigger supported model arch identifier is %s",
+                hw_properties.supported_model_arch);
     } else {
         ALOGE("STHAL Version is %u", hw_properties.header.version);
         pthread_mutex_unlock(&stdev->lock);
