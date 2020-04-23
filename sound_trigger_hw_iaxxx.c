@@ -3130,10 +3130,15 @@ static int stdev_get_model_state(const struct sound_trigger_hw_device *dev,
         goto exit;
     }
 
-    if (model->is_active == false) {
+    if (model->is_active == false &&
+        !is_uuid_in_recover_list(stdev, sound_model_handle)) {
         ALOGE("%s: ERROR: %d model is not active",
             __func__, sound_model_handle);
         ret = -ENOSYS;
+        goto exit;
+    } else if (is_uuid_in_recover_list(stdev, sound_model_handle)) {
+        ALOGD("%s: Ignore %d model request due to call active",
+            __func__, sound_model_handle);
         goto exit;
     }
 
