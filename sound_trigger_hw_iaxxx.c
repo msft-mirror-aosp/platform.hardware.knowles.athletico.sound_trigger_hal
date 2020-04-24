@@ -2458,7 +2458,8 @@ static void *callback_thread_loop(void *context)
                         // We need to send this only once, so reset now
                         stdev->models[idx].is_state_query = false;
                     }
-                    if (stdev->models[idx].type == SOUND_MODEL_TYPE_KEYPHRASE) {
+                    if (stdev->models[idx].type == SOUND_MODEL_TYPE_KEYPHRASE &&
+                        stdev->adnc_strm_handle[idx] == 0) {
                         struct sound_trigger_phrase_recognition_event *event;
                         event = (struct sound_trigger_phrase_recognition_event*)
                                     stdev_keyphrase_event_alloc(
@@ -2483,7 +2484,8 @@ static void *callback_thread_loop(void *context)
                         } else {
                             ALOGE("Failed to allocate memory for the event");
                         }
-                    } else if (stdev->models[idx].type == SOUND_MODEL_TYPE_GENERIC) {
+                    } else if (stdev->models[idx].type == SOUND_MODEL_TYPE_GENERIC &&
+                               stdev->adnc_strm_handle[idx] == 0) {
                         struct sound_trigger_generic_recognition_event *event;
                         event = (struct sound_trigger_generic_recognition_event*)
                                 stdev_generic_event_alloc(
@@ -2508,6 +2510,8 @@ static void *callback_thread_loop(void *context)
                         } else {
                             ALOGE("Failed to allocate memory for the event");
                         }
+                    } else if (stdev->adnc_strm_handle[idx] != 0) {
+                        ALOGD("model %d is streaming.", idx);
                     }
                 } else {
                     ALOGE("Invalid id or keyword is not active, Subsume the event");
@@ -3130,10 +3134,15 @@ static int stdev_get_model_state(const struct sound_trigger_hw_device *dev,
         goto exit;
     }
 
-    if (model->is_active == false) {
+    if (model->is_active == false &&
+        !is_uuid_in_recover_list(stdev, sound_model_handle)) {
         ALOGE("%s: ERROR: %d model is not active",
             __func__, sound_model_handle);
         ret = -ENOSYS;
+        goto exit;
+    } else if (is_uuid_in_recover_list(stdev, sound_model_handle)) {
+        ALOGD("%s: Ignore %d model request due to call active",
+            __func__, sound_model_handle);
         goto exit;
     }
 
