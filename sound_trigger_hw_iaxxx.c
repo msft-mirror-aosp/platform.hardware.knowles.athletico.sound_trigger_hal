@@ -170,7 +170,6 @@ struct knowles_sound_trigger_device {
     sound_trigger_uuid_t entity_model_uuid;
     sound_trigger_uuid_t wakeup_model_uuid;
 
-    int last_detected_model_type;
     bool is_mic_route_enabled;
     bool is_bargein_route_enabled;
     bool is_chre_loaded;
@@ -537,7 +536,6 @@ static char *stdev_generic_event_alloc(int model_handle, void *payload,
     event->common.audio_config.format = AUDIO_FORMAT_PCM_16_BIT;
 
     if (payload && payload_size > 0) {
-        ALOGD("%s: Attach payload in the event", __func__);
         event->common.data_size = payload_size;
         event->common.data_offset =
                         sizeof(struct sound_trigger_generic_recognition_event);
@@ -2315,12 +2313,8 @@ static void *callback_thread_loop(void *context)
                     err = get_event(stdev->odsp_hdl, &ge);
                     if (err == 0) {
                         if (ge.event_id == OK_GOOGLE_KW_ID) {
-                            ALOGD("Eventid received is OK_GOOGLE_KW_ID %d",
-                                OK_GOOGLE_KW_ID);
                             kwid = OK_GOOGLE_KW_ID;
                         } else if (ge.event_id == AMBIENT_KW_ID) {
-                            ALOGD("Eventid received is AMBIENT_KW_ID %d",
-                                AMBIENT_KW_ID);
                             kwid = AMBIENT_KW_ID;
                             reset_ambient_plugin(stdev->odsp_hdl);
                         } else if (ge.event_id == OSLO_EP_DISCONNECT) {
@@ -2358,18 +2352,13 @@ static void *callback_thread_loop(void *context)
                             }
                             break;
                         } else if (ge.event_id == ENTITY_KW_ID) {
-                            ALOGD("Eventid received is ENTITY_KW_ID %d",
-                                ENTITY_KW_ID);
                             kwid = ENTITY_KW_ID;
                         } else if (ge.event_id == WAKEUP_KW_ID) {
-                            ALOGD("Eventid received is WAKEUP_KW_ID %d",
-                                WAKEUP_KW_ID);
                             kwid = WAKEUP_KW_ID;
                         } else {
                             ALOGE("Unknown event id received, ignoring %d",
                                 ge.event_id);
                         }
-                        stdev->last_detected_model_type = kwid;
                         break;
                     } else {
                         ALOGE("get_event failed with error %d", err);
@@ -3909,24 +3898,25 @@ int sound_trigger_hw_call_back(audio_event_type_t event,
             } else {
                 bool keyword_stripping_enabled = false;
                 int stream_end_point;
-                switch (stdev->last_detected_model_type) {
-                    case OK_GOOGLE_KW_ID:
-                        stream_end_point = CVQ_ENDPOINT;
-                        break;
-                    case AMBIENT_KW_ID:
-                    case ENTITY_KW_ID:
-                        stream_end_point = MUSIC_BUF_ENDPOINT;
-                        break;
-                    default:
-                        stream_end_point = CVQ_ENDPOINT;
-                        break;
-                };
+                if (check_uuid_equality(stdev->models[index].uuid,
+                                        stdev->hotword_model_uuid)) {
+                    stream_end_point = CVQ_ENDPOINT;
+                } else if (check_uuid_equality(stdev->models[index].uuid,
+                                        stdev->ambient_model_uuid)) {
+                    stream_end_point = MUSIC_BUF_ENDPOINT;
+                } else if (check_uuid_equality(stdev->models[index].uuid,
+                                        stdev->entity_model_uuid)) {
+                    stream_end_point = MUSIC_BUF_ENDPOINT;
+                } else {
+                    stream_end_point = CVQ_ENDPOINT;
+                }
                 stdev->adnc_strm_handle[index] = stdev->adnc_strm_open(
                                             keyword_stripping_enabled, 0,
                                             stream_end_point);
                 if (stdev->adnc_strm_handle[index]) {
-                    ALOGD("Successfully opened adnc strm! index %d handle %d",
-                          index, config->u.aud_info.ses_info->capture_handle);
+                    ALOGD("Opened adnc index %d handle %d endpoint 0x%x",
+                          index, config->u.aud_info.ses_info->capture_handle,
+                          stream_end_point);
                     stdev->is_streaming++;
 
                     clock_gettime(CLOCK_REALTIME, &stdev->adnc_strm_last_read[index]);
