@@ -2683,7 +2683,7 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
     int ret = 0;
     int kw_model_sz = 0;
     int i = 0;
-
+    sound_trigger_uuid_t empty_uuid = {0};
     unsigned char *kw_buffer = NULL;
 
     ALOGD("+%s+", __func__);
@@ -2702,6 +2702,12 @@ static int stdev_load_sound_model(const struct sound_trigger_hw_device *dev,
     if (sound_model->data_size == 0 ||
         sound_model->data_offset < sizeof(struct sound_trigger_sound_model)) {
         ALOGE("%s: Invalid sound model data", __func__);
+        ret = -EINVAL;
+        goto exit;
+    }
+
+    if (check_uuid_equality(sound_model->vendor_uuid, empty_uuid)) {
+        ALOGE("%s Invalid vendor uuid", __func__);
         ret = -EINVAL;
         goto exit;
     }
