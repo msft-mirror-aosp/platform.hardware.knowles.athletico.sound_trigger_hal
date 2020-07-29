@@ -1140,7 +1140,7 @@ int setup_sensor_package(struct iaxxx_odsp_hw *odsp_hdl)
         return err;
     }
 
-    // Create Dummy sensor plugin
+    // Create placeholder sensor plugin
     err = iaxxx_odsp_plugin_create(odsp_hdl, SENSOR_INSTANCE_ID,
                                    SENSOR_PRIORITY, SENSOR_PKG_ID,
                                    SENSOR_PLUGIN_IDX, IAXXX_HMD_BLOCK_ID,
