@@ -796,6 +796,48 @@ exit:
     return err;
 }
 
+unsigned int get_hotword_version(struct iaxxx_odsp_hw *odsp_hdl)
+{
+    int err = 0;
+    const uint32_t inst_id = HOTWORD_INSTANCE_ID;
+    const uint32_t param_id = HOTWORD_GET_VERSION_PARAM_ID;
+    const uint32_t block_id = IAXXX_HMD_BLOCK_ID;
+    unsigned int param_val = HOTWORD_DEFAULT_VER;
+
+    err = setup_hotword_package(odsp_hdl);
+    if (err != 0) {
+        if (errno == EEXIST) {
+            ALOGW("%s: WARN: Hotword package existed already", __func__);
+            err = iaxxx_odsp_plugin_get_parameter(odsp_hdl, inst_id, param_id,
+                                                  block_id, &param_val);
+            if (err != 0) {
+                ALOGE("%s: Failed to get parameter for id %u with error %d: %s",
+                      __func__, param_id, err, strerror(errno));
+            } else {
+                ALOGD("%s: Value of parameter id %u is %u", __func__, param_id,
+                      param_val);
+            }
+        } else {
+            ALOGE("%s: ERROR: setup hotword package failed", __func__);
+        }
+    } else {
+        err = iaxxx_odsp_plugin_get_parameter(odsp_hdl, inst_id, param_id,
+                                              block_id, &param_val);
+        if (err != 0) {
+            ALOGE("%s: Failed to get parameter for id %u with error %d: %s",
+                  __func__, param_id, err, strerror(errno));
+        } else {
+            ALOGD("%s: Value of parameter id %u is %u", __func__, param_id,
+                  param_val);
+        }
+        err = destroy_hotword_package(odsp_hdl);
+        if (err != 0)
+            ALOGE("%s: ERROR: destroy hotword package failed", __func__);
+    }
+
+    return param_val;
+}
+
 int setup_ambient_package(struct iaxxx_odsp_hw *odsp_hdl)
 {
     int err = 0;
@@ -861,6 +903,48 @@ int destroy_ambient_package(struct iaxxx_odsp_hw *odsp_hdl)
 
 exit:
     return err;
+}
+
+unsigned int get_ambient_version(struct iaxxx_odsp_hw *odsp_hdl)
+{
+    int err = 0;
+    const uint32_t inst_id = AMBIENT_INSTANCE_ID;
+    const uint32_t param_id = AMBIENT_GET_VERSION_PARAM_ID;
+    const uint32_t block_id = IAXXX_HMD_BLOCK_ID;
+    unsigned int param_val = AMBIENT_DEFAULT_VER;
+
+    err = setup_ambient_package(odsp_hdl);
+    if (err != 0) {
+        if (errno == EEXIST) {
+            ALOGW("%s: WARN: Ambient package existed already", __func__);
+            err = iaxxx_odsp_plugin_get_parameter(odsp_hdl, inst_id, param_id,
+                                              block_id, &param_val);
+            if (err != 0) {
+                ALOGE("%s: Failed to get parameter for id %u with error %d: %s",
+                      __func__, param_id, err, strerror(errno));
+            } else {
+                ALOGD("%s: Value of parameter id %u is %u", __func__, param_id,
+                      param_val);
+            }
+        } else {
+            ALOGE("%s: ERROR: setup Ambient package failed", __func__);
+        }
+    } else {
+        err = iaxxx_odsp_plugin_get_parameter(odsp_hdl, inst_id, param_id,
+                                              block_id, &param_val);
+        if (err != 0) {
+            ALOGE("%s: Failed to get parameter for id %u with error %d: %s",
+                  __func__, param_id, err, strerror(errno));
+        } else {
+            ALOGD("%s: Value of parameter id %u is %u", __func__, param_id,
+                  param_val);
+        }
+        err = destroy_ambient_package(odsp_hdl);
+        if (err != 0)
+            ALOGE("%s: ERROR: destroy Ambient package failed", __func__);
+    }
+
+    return param_val;
 }
 
 int setup_aec_package(struct iaxxx_odsp_hw *odsp_hdl)
@@ -1796,10 +1880,7 @@ int reset_all_route(struct audio_route *route_hdl)
 
     ALOGD("+%s+", __func__);
     for (int i = ST_ROUTE_MIN; i < ST_ROUTE_MAX; i++) {
-    /*[TODO] Need to use force_reset to clean the active count
-     *       inside libaudioroute
-     */
-        audio_route_reset_and_update_path(route_hdl, route_table[i]);
+        audio_route_force_reset_and_update_path(route_hdl, route_table[i]);
     }
     ALOGD("-%s-", __func__);
     return err;
