@@ -149,6 +149,16 @@ static const oslo_settings_t oslo_plugin_settings[] =
     {OSLO_SENSOR_PARAM_HOST,                                "plugin_set_host"},
     {OSLO_SENSOR_STATE,                                     "plugin_oslo_state"},
     {OSLO_SENSOR_CONFIG_RECOVERY_COUNTER,                   "plugin_config_retries"},
+    {OSLO_SENSOR_PARAM_ENABLE_PRESENCE,                     "plugin_enable_presence"},
+    {OSLO_SENSOR_PARAM_ENABLE_REACH,                        "plugin_enable_reach"},
+    {OSLO_SENSOR_PARAM_ENABLE_FLICK,                        "plugin_enable_flick"},
+    {OSLO_SENSOR_PARAM_ENABLE_SWIPE,                        "plugin_enable_swipe"},
+    {OSLO_SENSOR_PARAM_ENABLE_TAP,                          "plugin_enable_tap"},
+    {OSLO_SENSOR_PARAM_ENABLE_AUDIO_FILTER,                 "plugin_enable_audio_filter"},
+    {OSLO_SENSOR_PARAM_ENABLE_WLC_FILTER,                   "plugin_enable_wlc_filter"},
+    {OSLO_SENSOR_PARAM_CPS,                                 "plugin_cps"},
+    {OSLO_SENSOR_MAX_POWER_MODE,                            "plugin_max_power_mode"},
+    {OSLO_SENSOR_PARAM_SLPY_TEST_MODE,                      "plugin_slpy_test_mode"},
 };
 
 /* map oslo plugin test mode name to param id */
