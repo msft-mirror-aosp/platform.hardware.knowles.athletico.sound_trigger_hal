@@ -17,6 +17,7 @@
 #ifndef SOUND_TRIGGER_INTF_H
 #define SOUND_TRIGGER_INTF_H
 
+#include <cutils/list.h>
 #include <hardware/sound_trigger.h>
 #include "tinyalsa/asoundlib.h"
 
@@ -31,8 +32,8 @@
 #define MINOR_VERSION(ver) ((ver) & 0x00ff)
 
 /* Proprietary interface version used for compatibility with STHAL */
-#define STHAL_PROP_API_VERSION_1_0 MAKE_HAL_VERSION(1, 0)
-#define STHAL_PROP_API_CURRENT_VERSION STHAL_PROP_API_VERSION_1_0
+#define STHAL_PROP_API_VERSION_2_0 MAKE_HAL_VERSION(2, 0)
+#define STHAL_PROP_API_CURRENT_VERSION STHAL_PROP_API_VERSION_2_0
 
 #define ST_EVENT_CONFIG_MAX_STR_VALUE 32
 
@@ -128,8 +129,14 @@ struct sound_trigger_get_param_data {
     struct str_parms *reply;
 };
 
+struct audio_device_info {
+    struct listnode list;
+    audio_devices_t type;
+    char address[AUDIO_DEVICE_MAX_ADDRESS_LEN];
+};
+
 struct sound_trigger_device_info {
-    int device;
+    struct listnode devices;
 };
 
 struct audio_event_info {
