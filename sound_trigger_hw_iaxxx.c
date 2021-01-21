@@ -3560,6 +3560,9 @@ static int stdev_open(const hw_module_t *module, const char *name,
     stdev->device.get_properties_extended = stdev_get_properties_extended;
 
     stdev->opened = true;
+    stdev->send_sock = -1;
+    stdev->recv_sock = -1;
+
     /* Initialize all member variable */
     for (i = 0; i < MAX_MODELS; i++) {
         stdev->models[i].type = SOUND_MODEL_TYPE_UNKNOWN;
