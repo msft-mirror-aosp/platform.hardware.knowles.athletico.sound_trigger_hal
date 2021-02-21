@@ -2632,6 +2632,10 @@ static int stop_recognition(struct knowles_sound_trigger_device *stdev,
         model->is_active = false;
         goto exit;
     }
+    if (model->is_active == false) {
+        ALOGW("%s: the model was disabled already", __func__);
+        goto exit;
+    }
 
     if (stdev->adnc_strm_handle[handle] != 0) {
         ALOGD("%s: stop tunnling for index:%d", __func__, handle);
