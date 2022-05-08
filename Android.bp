@@ -25,11 +25,8 @@ soong_config_string_variable {
     ],
 }
 
-soong_config_string_variable {
-    name: "platform_version_use_sound_trigger_hal",
-    values: [
-        "P",
-    ],
+soong_config_bool_variable {
+    name: "sound_trigger_hal_is_android_p",
 }
 
 soong_config_module_type {
@@ -38,7 +35,7 @@ soong_config_module_type {
     config_namespace: "knowles",
     variables: [
         "use_sound_trigger_hal",
-        "platform_version_use_sound_trigger_hal",
+        "sound_trigger_hal_is_android_p",
     ],
     properties: [
         "enabled",
@@ -59,13 +56,9 @@ use_sound_trigger_hal_cc_defaults {
                 enabled: false,
             }
         },
-        platform_version_use_sound_trigger_hal: {
-            p: {
-                proprietary: true,
-                cflags: ["-DANDROID_P"],
-            },
-            conditions_default: {
-            },
+        sound_trigger_hal_is_android_p: {
+            proprietary: true,
+            cflags: ["-DANDROID_P"],
         }
     },
 }
